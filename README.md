@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/rankati-logo.png" alt="Rankati" width="128"></p>
+
 # Rankati
 
 > A **personal decision engine for tasks** — self-hosted, single-user. Not a to-do list.
