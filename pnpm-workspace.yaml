@@ -1,0 +1,20 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 11 blocks dependency install scripts unless listed here. All are denied —
+# each verified to be unnecessary, not merely assumed so (ADRs 0036, 0043).
+allowBuilds:
+  # Prisma 7's client is Rust-free: `prisma generate` emits the full client with
+  # these denied, so granting install-time code execution buys nothing.
+  '@prisma/engines': false
+  prisma: false
+  # Reaches us only transitively, via @nestjs/cli's own toolchain — pnpm still
+  # demands a ruling on a clean install. Its native binary ships as a platform
+  # optionalDependency, and the smoke tests pass with the build denied.
+  '@swc/core': false
+
+# Enforce engines.node so the pin bites outside fnm too — CI, containers, any
+# non-fnm build (ADR 0038). This must live here, in camelCase: pnpm 11 only *warns*
+# on `engine-strict=true` in .npmrc, and silently ignores `engine-strict` (kebab) here.
+engineStrict: true

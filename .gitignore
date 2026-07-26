@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma client — generated from schema.prisma by `prisma generate` (ADR 0033).
+# Regenerated via postinstall; the Dockerfile must run it too (nothing to copy in).
+apps/api/src/generated/
+
+# Environment / secrets — ADR 0036: config via .env, never baked in or committed
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store

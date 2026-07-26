@@ -1,0 +1,25 @@
+{
+  // Type-checks the tests, which tsconfig.json deliberately does not.
+  //
+  // `include: ['src', 'vite.config.ts']` there is correct — `vite build` must not compile
+  // test files into the bundle. But it meant `tsc -b` silently skipped test/, so a fixture
+  // could claim to be a `Task` while missing half its fields and nothing would say so.
+  // Vitest strips types with esbuild without checking them, so nothing else was catching it
+  // either: the fixtures were only ever validated by whether the component happened to
+  // touch the missing field at runtime.
+  //
+  // That is exactly what happened at v0.5: `dependsOn` joined Task, the navigation
+  // fixture kept compiling, and the test failed later with
+  // "Cannot read properties of undefined (reading 'map')" — a type error wearing a runtime
+  // crash's clothes.
+  //
+  // The API has had this since v0.2 (apps/api/tsconfig.test.json, same reasoning). The
+  // harness added in v0.3 should have brought it along and did not.
+  //
+  // Used by `pnpm typecheck`. Emits nothing.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+}

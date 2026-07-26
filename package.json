@@ -1,0 +1,21 @@
+{
+  "name": "rankati",
+  "private": true,
+  "version": "0.30.0",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": "22.23.1"
+  },
+  "scripts": {
+    "db:up": "docker compose -f docker-compose.dev.yml up -d",
+    "dev": "pnpm -r --parallel dev",
+    "dev:restart": "bash scripts/dev.sh restart",
+    "dev:check": "bash scripts/dev.sh status",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,422 @@
+// Mirrors packages/shared/src/index.ts exactly — the shared types are the contract,
+// this is its storage (ADRs 0033, 0034, 0041).
+
+generator client {
+  // Prisma 7's Rust-free generator. Emits TypeScript into src/, so it is compiled by
+  // apps/api's own CommonJS tsconfig (ADR 0033).
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  // No `url` here: Prisma 7 rejects it (P1012). The connection string lives in
+  // prisma.config.ts for Migrate, and reaches the client via the driver adapter
+  // in PrismaService (ADR 0033).
+  provider = "postgresql"
+}
+
+enum TaskStatus {
+  active
+  done
+}
+
+/// A DECLARED importance tier — how steeply importance should escalate near a deadline
+/// (ADR 0056). This is NOT the earned Arena rating: `rating` is won by dueling, `tier` is
+/// asserted by the person, and the future urgency model needs both as separate inputs
+/// (rating the backbone, tier the exponent). Stored as these snake_case identifiers,
+/// shown as labels ("Super Important"). Non-null with a default of `normal` (below), so
+/// there is no null state and the scoring milestone never handles one — normal is the
+/// baseline, where the exponent produces no escalation.
+enum TaskTier {
+  normal
+  important
+  super_important
+  critical
+}
+
+/// The availability-window gate's FIXED presets (ADR 0070) — a closed set, not a builder.
+/// NULL on the column = Anytime = ungated.
+enum AvailabilityWindow {
+  working_hours
+  workdays
+  weekend
+}
+
+/// Effort bucket (ADR 0072) — the `fit` term's ordinal size. NULL = untagged = fits any block.
+enum Effort {
+  quick
+  medium
+  long
+}
+
+/// Impact level (ADR 0075) — drives the safety-net pin, never `priority_now`. Default none; the level
+/// sets the pin's fuse (high = 7 days, medium = 30) off the created date.
+enum Impact {
+  none
+  medium
+  high
+}
+
+/// Routines (ADR 0066) — recurring rhythms, wholly outside the engine.
+enum RoutineType {
+  frequency
+  interval_floating
+  interval_fixed
+}
+
+/// One unit enum for both frequency periods (uses all four) and floating intervals (never `year`,
+/// enforced in the service). Fewer enums, one source of truth for the shared unit vocabulary.
+enum RoutineUnit {
+  day
+  week
+  month
+  year
+}
+
+enum RoutineFixedRuleKind {
+  nth_weekday_of_month
+  day_of_month
+  last_weekday_of_month
+}
+
+model List {
+  id      String @id @default(uuid())
+  name    String
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  tasks Task[]
+
+  @@index([ownerId])
+}
+
+model Task {
+  id      String @id @default(uuid())
+  title   String
+  listId  String
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  status      TaskStatus @default(active)
+  createdAt   DateTime   @default(now())
+  completedAt DateTime?
+
+  /// The one hidden rating — this IS "importance" (ADRs 0003, 0007, 0047).
+  ///
+  /// Decimal, not Float: 0048 promises that history can be replayed years from now to
+  /// retune, and Elo needs 10^((Rb-Ra)/400) — a fractional power. `Math.pow` is
+  /// implementation-approximated in ECMAScript, so it is not guaranteed identical across
+  /// engines or Node versions, unlike the basic operators. decimal.js is software-defined
+  /// and stable, which is what makes a future replay reproduce today's numbers.
+  /// Two decimal places, enforced by the column rather than by code remembering to round:
+  /// Elo is computed at full precision and rounded once, on the way in (0047).
+  /// The not-before gate: don't surface this in Today until this day (ADR 0052).
+  ///
+  /// @db.Date, not a timestamp: "don't show it until the 20th" is a statement about a
+  /// CALENDAR DAY. An instant would invent a time nobody chose and drag a timezone into
+  /// the column — and the timezone is exactly what this gate must not get wrong.
+  ///
+  /// NULL = ungated, which is every task that existed before this column. Whether the day
+  /// has arrived is judged against the USER'S local day, sent by the client, never the
+  /// server's clock: both boxes run UTC and the user does not (0052).
+  ///
+  /// It does NOT hide the task from the Arena. Gated tasks still duel, on purpose — see
+  /// 0052 before "fixing" that.
+  notBefore DateTime? @db.Date
+
+  /// The deadline — "should be done by this day" (ADR 0056). INDEPENDENT of notBefore, which
+  /// is the opposite statement ("can't start until"). A task may carry both, either, or
+  /// neither, on different days; they never interact.
+  ///
+  /// Same discipline as notBefore, and for the same reason: @db.Date, a plain calendar day,
+  /// never an instant — a deadline is a day nobody attached a time or timezone to, and the
+  /// day is exactly what a future urgency ramp must not get wrong. NULL = no deadline, which
+  /// the future model reads as urgency 1 (no escalation). v0.6 captures and displays it only;
+  /// it does NOT gate or rank on it.
+  due DateTime? @db.Date
+
+  /// The availability-window gate (ADR 0070): one FIXED preset from a closed set, or NULL =
+  /// Anytime = ungated — the default, and every task that existed before this column. The
+  /// 0052 optional-field shape: hides from Today only, never from Lists or the Arena. This
+  /// column is inert storage in this slice; the gate clause lands with the predicate.
+  availabilityWindow AvailabilityWindow?
+
+  /// Effort bucket for the `fit` ranking term (ADR 0072). NULL = untagged = fits any block and
+  /// never sinks. Inert storage in this slice; the fit penalty lands in the Today-hand scoring
+  /// with the server slice. Display-only minute thresholds live client-side, never here.
+  effort Effort?
+
+  /// Declared impact level (ADR 0075). Default none, so a defaulted column backfills every existing
+  /// row to none — nothing suddenly nags after the upgrade. Drives the client-side safety-net pin
+  /// only, never `priority_now`; the server stores and exposes it, computes no pin.
+  impact Impact @default(none)
+
+  /// Declared importance tier (ADR 0056) — see the TaskTier enum. Server-stamped like
+  /// ownerId (0039): non-null, defaults to `normal`, so every task always has one and the
+  /// client carries no obligation to set it. Declared, not earned — distinct from `rating`.
+  tier TaskTier @default(normal)
+
+  rating Decimal @default(1000) @db.Decimal(12, 2)
+
+  /// Committed duels only — pending taps are not history (0048).
+  /// Provisional is DERIVED from this (`duelCount < 5`), never stored (0047).
+  duelCount Int @default(0)
+
+  list      List   @relation(fields: [listId], references: [id], onDelete: Cascade)
+  duelsWon  Duel[] @relation("DuelWinner")
+  duelsLost Duel[] @relation("DuelLoser")
+
+  /// What this task waits for, and what waits on it (ADR 0053).
+  ///
+  /// Two directions because 0010 walks the second one: urgency propagates BACKWARD along
+  /// dependency chains, so "what does this task unblock?" has to be a query rather than a
+  /// scan. That is also why this is a join table and not a String[] of ids.
+  blockedBy TaskDependency[] @relation("Blocked")
+  blocking  TaskDependency[] @relation("Blocking")
+
+  /// The places this task is doable (ADR 0060). Empty = doable anywhere, shown in EVERY
+  /// context. Many-to-many through TaskLocation, the TaskDependency shape (0053). Location
+  /// filters the reads client-side, never the Arena — importance is judged wherever I am.
+  locations TaskLocation[]
+
+  /// A soft "this involves or waits on a person" marker (ADR 0071) — NOT a gate. It never
+  /// hides the task from Today/Lists/the Arena and never stops it dueling; it replaces the
+  /// hard people gate (0009 #6) and ADR 0012's four-state model for the owner's actual need.
+  /// Who the person is lives in the title or a checklist item — this flag carries no
+  /// relationship, no contact, no availability. Non-null with a default of false (like tier),
+  /// so every existing task is unaffected and the client carries no obligation to set it.
+  needsHand Boolean @default(false)
+
+  /// The "needs details" flag (ADR 0073) — "unedited since creation," a soft marker, NEVER a gate.
+  /// Set true by every create path and cleared by the first field/checklist edit; also
+  /// client-toggleable ("revisit later"). Non-null with a default of false (like needsHand), so
+  /// every EXISTING row is unflagged — the flag is a creation-time stamp and backfilling it would
+  /// lie about history. Inert storage in this slice; the set-on-create / clear-on-edit lifecycle
+  /// lands with the server slice.
+  needsDetails Boolean @default(false)
+
+  /// A per-task, plain-text readiness list (ADR 0071) — NEVER a gate. Ticks persist
+  /// permanently; nothing auto-resets `done`. Ordered by `position`.
+  checklist ChecklistItem[]
+
+  @@index([ownerId])
+  @@index([listId])
+  /// Fair pairing draws the least-dueled active tasks first (0004).
+  @@index([ownerId, status, duelCount])
+  /// Ranked list, and the nearest-rating opponent for placement (0047).
+  @@index([ownerId, status, rating])
+}
+
+/// A committed duel. THE TRUTH: `Task.rating` and `Task.duelCount` are a materialized
+/// view of this table, and if they ever disagree, this wins (ADR 0048).
+///
+/// Only committed duels live here. Pending taps are held in memory and never reach the
+/// database unless the session is ended.
+/// A depends on B: A is blocked while B is not done (ADR 0053).
+///
+/// No ownerId, deliberately diverging from Duel. Duel carries one because the log is
+/// queried directly by owner; a dependency is only ever reached THROUGH a task, which
+/// already carries the owner — so a column here would be denormalised state with no query
+/// behind it, and a second place for the owner to disagree with itself. Additive later if
+/// multi-user makes it a real access boundary.
+model TaskDependency {
+  /// The blocked task.
+  taskId String
+  /// The prerequisite. `taskId` waits for this one to be done.
+  dependsOnId String
+
+  createdAt DateTime @default(now())
+
+  /// Cascade BOTH ways, and the second one is what 0053 rests on: delete the blocker and
+  /// the link goes with it, so the dependent is simply no longer blocked. Refusing to
+  /// delete a task something depends on would make deletion fail for reasons on a screen
+  /// you are not looking at.
+  task      Task @relation("Blocked", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("Blocking", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  /// The same link twice is the same link — the database says so rather than the code
+  /// remembering to check.
+  @@id([taskId, dependsOnId])
+  /// "What does this task unblock?" — the direction 0010 traverses (see above).
+  @@index([dependsOnId])
+}
+
+/// A place I go — a first-class, user-managed context (ADR 0060). NOT free text and NOT a
+/// list: a trip or a project is a list, a location is a PLACE. Seeded with a starting set,
+/// freely addable, renameable, deletable.
+model Location {
+  id String @id @default(uuid())
+
+  /// Stored with the capitalisation FIRST TYPED. Uniqueness is CASE-INSENSITIVE and lives in
+  /// the migration as `CREATE UNIQUE INDEX ... (ownerId, lower(name))` — an expression index
+  /// Prisma's schema cannot express (ADR 0061). It is deliberately NOT declared here, which
+  /// means `prisma migrate` cannot drift-detect it: a future migration could drop it and the
+  /// service-side pre-check would keep catching ordinary duplicates, hiding that the DB floor
+  /// had gone. A dedicated test asserts the index EXISTS (pg_indexes) so that loss fails loud.
+  name String
+
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  tasks TaskLocation[]
+
+  @@index([ownerId])
+}
+
+/// A task is doable in a location (ADR 0060). Many-to-many, the TaskDependency shape (0053):
+/// a composite primary key so the same tag twice is the same tag, and an index on locationId
+/// for "which tasks are here?" — the filter, delete and merge all traverse that direction.
+///
+/// No ownerId, like TaskDependency: this row is only ever reached THROUGH a task or a
+/// location, each of which already carries the owner — a column here would be denormalised
+/// state with no query behind it and a second place for the owner to disagree with itself.
+model TaskLocation {
+  taskId     String
+  locationId String
+
+  createdAt DateTime @default(now())
+
+  /// Cascade BOTH ways. Delete the task and the tag goes with it. Delete the LOCATION and the
+  /// tag goes but the task survives, untagged — which IS 0061's "delete untags, the task keeps
+  /// existing" behaviour, done by the database rather than by code remembering to.
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, locationId])
+  @@index([locationId])
+}
+
+/// A per-task readiness checklist item (ADR 0071). A real related table, not a JSON column —
+/// the house pattern already set by TaskDependency (0053) and TaskLocation (0061): real
+/// per-item CRUD, a `position` for ordering, referential integrity via cascade, and the
+/// deferred promote-item-to-task door stays open on a stable id.
+///
+/// NEVER a gate: a checklist never hides or blocks a task from Today, Upcoming, Lists, or the
+/// Arena, and `done` never auto-resets — an item only leaves the table when explicitly
+/// deleted or when its task is deleted (cascade).
+model ChecklistItem {
+  id     String @id @default(uuid())
+  taskId String
+
+  text     String
+  done     Boolean @default(false)
+  position Int
+
+  createdAt DateTime @default(now())
+
+  /// Deleting the task deletes its checklist with it — an item never outlives its task.
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model Duel {
+  id String @id @default(uuid())
+
+  /// Monotonic tap order. Replay must be deterministic and undo must pop *the* last
+  /// result; two taps in the same millisecond would make both ambiguous (0048).
+  seq Int @unique @default(autoincrement())
+
+  /// Which sitting this tap belonged to. The session object itself is ephemeral and is
+  /// gone the moment it commits — this stamp is what survives it. K freezes at session
+  /// start (0047), so regrouping duels by session is the ONLY way a retune can recompute
+  /// K under new constants. Without it, frozen-K history could never be retuned, and
+  /// 0048's central promise would be undeliverable.
+  sessionId String
+
+  winnerId String
+  loserId  String
+
+  /// The K each player actually moved by. TWO values, because K is per player (0047):
+  /// a provisional newcomer moves by 64 while the settled task it beat moves by 24.
+  ///
+  /// Faithful replay uses these. A retune deliberately IGNORES them and recomputes K
+  /// from the new constants — which is exactly why sessionId above must exist.
+  kWinner Int
+  kLoser  Int
+
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  /// The tap time, carried over from the session — not the commit time.
+  createdAt DateTime @default(now())
+
+  /// Both relations cascade, stated explicitly rather than left to a default: deleting a
+  /// task takes the duels it appeared in with it (0048). Two cascade paths reach Task
+  /// from this table (winner and loser); Postgres allows that, unlike some engines.
+  winner Task @relation("DuelWinner", fields: [winnerId], references: [id], onDelete: Cascade)
+  loser  Task @relation("DuelLoser", fields: [loserId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, seq])
+  @@index([sessionId])
+}
+
+/// A recurring rhythm (ADR 0066), wholly OUTSIDE the engine: never duels, never gates, never enters
+/// Today/Upcoming/Lists/the Arena. One discriminated row — a `type` plus mode-specific NULLABLE
+/// columns, the Task optional-field shape (0052). No relations, no children: delete is a single row.
+///
+/// Every calendar field is `@db.Date` — a plain day, the 0052 discipline — with ONE exception:
+/// `snoozedUntil` is a full timestamp, because snooze presets are sub-day (5 min, 1 hr).
+model Routine {
+  id        String      @id @default(uuid())
+  name      String
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId   String      @default("local")
+  type      RoutineType
+  createdAt DateTime    @default(now())
+
+  /// The display-only Snooze's hide-until moment — the one date+TIME field. NULL = not snoozed.
+  snoozedUntil DateTime?
+
+  // frequency
+  periodUnit  RoutineUnit?
+  targetCount Int?
+  periodCount Int?
+  periodStart DateTime?    @db.Date
+
+  // interval_floating
+  intervalUnit     RoutineUnit?
+  intervalCount    Int?
+  preferredWeekday Int?
+  nextDue          DateTime?    @db.Date
+
+  // interval_fixed — the FixedRule flattened (nullable per kind)
+  ruleKind         RoutineFixedRuleKind?
+  ruleOrdinal      Int?
+  ruleWeekday      Int?
+  ruleDayOfMonth   Int?
+  /// The dismissed occurrence, so a fixed reminder stays dismissed until that date passes (0066).
+  acknowledgedDate DateTime?             @db.Date
+
+  @@index([ownerId])
+}
+
+/// The single user (ADR 0076). Its EXISTENCE is the "setup done" signal — zero rows = first-run.
+/// One account, one dataset; ownerId stays constant (0026/0039), so this gates entry, not data.
+model Account {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  /// argon2id hash — never plaintext (ADR 0076).
+  passwordHash String
+  createdAt    DateTime @default(now())
+  /// Escalating lockout state, PERSISTED so it survives a restart (ADR 0076): consecutive failed
+  /// logins, and the instant the account is locked until (null = not locked). A successful login
+  /// resets failedAttempts to 0 and clears lockedUntil.
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  sessions       Session[]
+}
+
+/// A revocable server-side session (ADR 0076). `id` IS the opaque cryptographically-random token the
+/// cookie carries — set explicitly at creation, not defaulted. Revoke = delete the row.
+model Session {
+  id        String   @id
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  /// "Trust this device" — a 30-day session; unchecked sessions expire at browser close (ADR 0076).
+  trusted   Boolean  @default(false)
+
+  @@index([accountId])
+}

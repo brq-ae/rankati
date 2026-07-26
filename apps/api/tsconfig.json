@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // NestJS compiles to CommonJS. The Prisma 7 client is emitted as TypeScript into
+    // src/generated, so it is compiled by THIS config — which is why Prisma being
+    // "ESM-only" does not collide with Nest here (ADRs 0033, 0041).
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "declaration": false,
+    "sourceMap": true
+  },
+  // prisma.config.ts is loaded by the Prisma CLI's own TS loader, not by nest build.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

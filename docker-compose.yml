@@ -1,0 +1,88 @@
+# Rankati — self-host stack.
+#
+#   cp .env.example .env      # then set a strong POSTGRES_PASSWORD
+#   docker compose up -d
+#
+# Three services: the web front door (the only published port), the api behind it, and a
+# bundled PostgreSQL. The api applies its own database migrations on startup, so a fresh
+# `docker compose up` initializes the schema on its own — nothing else to run.
+#
+# For internet exposure, put a TLS-terminating reverse proxy (Caddy, nginx, Traefik,
+# Cloudflare tunnel) in front of the published web port and set TRUST_PROXY=true. See
+# docs/INSTALL.md. Never expose the plain HTTP port directly.
+services:
+  db:
+    image: postgres:16.14-trixie
+    container_name: rankati-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: brqae/rankati-api:${RANKATI_VERSION:-0.30.0}
+    container_name: rankati-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Built from the POSTGRES_* parts by default (host `db` = the service above, the
+      # internal Postgres port 5432) so there is ONE password to set. Set DATABASE_URL in
+      # .env only to override — e.g. to point Rankati at an external database.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public}
+      API_PORT: '3000'
+      # 0.0.0.0 within the internal compose network only — this service publishes no port,
+      # so the web container is the only thing that can reach it.
+      API_HOST: '0.0.0.0'
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      NODE_ENV: production
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      # Generous: the api applies migrations before it starts listening.
+      start_period: 60s
+
+  web:
+    image: brqae/rankati-web:${RANKATI_VERSION:-0.30.0}
+    container_name: rankati-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_ORIGIN: http://api:3000
+      # false = safe default: strip client-supplied X-Forwarded-* headers. Set true ONLY
+      # behind a trusted TLS proxy — that is also what marks the session cookie Secure.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      NODE_ENV: production
+    ports:
+      # The ONE published port of the whole stack. Point your browser — or a TLS reverse
+      # proxy for internet exposure — at this host port. The container listens on 8080.
+      - '${WEB_PORT:-12101}:8080'
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pgdata:
+    name: rankati_pgdata

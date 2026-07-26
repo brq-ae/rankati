@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover + the manifest make this installable and full-screen
+         friendly for the kiosk case (ADR 0030). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Overwritten before paint by the script below (default-theme canvas per mode), then kept
+         in sync with the live canvas by React (ADR 0062). This static value is only the fallback
+         if the script never runs: brand's dark canvas, the default. -->
+    <meta name="theme-color" content="#1a102e" />
+    <meta name="description" content="Rankati — a personal decision engine for tasks." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <title>Rankati</title>
+    <!--
+      Apply BOTH axes BEFORE the first paint (ADRs 0051, 0062): the mode (light/dark) and the
+      theme (palette). Either applied late would flash on mount — light snapping to dark, or one
+      palette snapping to another — the exact bug this script exists to prevent.
+
+      It cannot import anything (nothing is loaded yet), so the constants are DUPLICATED here and
+      in src/mode.ts (the mode key) and src/palette.ts (the palette key, the valid set, the
+      default). The drift guard in test/anti-flash.spec.tsx reads THIS file and fails if any of
+      them diverge from those modules — so the duplication is detectable, not trusted.
+
+      Wrapped in try/catch: localStorage throws in some privacy modes, and a theme is never worth
+      a blank page.
+    -->
+    <script>
+      (function () {
+        var root = document.documentElement;
+
+        // MODE axis — key 'deck.theme', default dark. prefers-color-scheme is deliberately NOT
+        // consulted: Deck defaults to dark whatever the OS says (0051).
+        var mode = null;
+        try {
+          mode = localStorage.getItem('deck.theme');
+        } catch (e) {
+          /* storage unavailable — fall through to the default */
+        }
+        var dark = mode !== 'light';
+        root.classList.toggle('dark', dark);
+        // Tells the browser to render native scrollbars and form controls to match.
+        root.style.colorScheme = dark ? 'dark' : 'light';
+
+        // THEME axis — key 'deck.palette', default 'brand'. An unknown/stale value (a downgrade,
+        // a typo) falls back to the default rather than applying an untokenised data-theme (0062).
+        var palette = null;
+        try {
+          palette = localStorage.getItem('deck.palette');
+        } catch (e) {
+          /* storage unavailable — fall through to the default */
+        }
+        if (palette !== 'slate' && palette !== 'brand' && palette !== 'warm' && palette !== 'clear') {
+          palette = 'brand';
+        }
+        root.dataset.theme = palette;
+
+        // Browser chrome (mobile address bar): the DEFAULT theme's canvas for this mode, so the
+        // common case is flash-free. A non-default stored theme is corrected by React on mount
+        // (chrome only, never content). These two values are brand's canvas — see docs/THEMES.md.
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', dark ? '#1a102e' : '#f8fafc');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

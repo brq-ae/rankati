@@ -1,0 +1,31 @@
+# Dev Postgres only (ADR 0035). The app runs natively with hot reload —
+# the app image is never built for a code change.
+#   docker compose -f docker-compose.dev.yml up -d
+services:
+  db:
+    # Pinned to the exact patch and distro variant (ADR 0038).
+    image: postgres:16.14-trixie
+    container_name: rankati-dev-db
+    restart: unless-stopped
+    environment:
+      # ${VAR:?} fails loudly rather than silently starting an unconfigured database.
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    ports:
+      # Loopback only: the API runs natively on this box, so nothing off-box
+      # needs Postgres (ADR 0036 — expose only what is needed).
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+    name: rankati_pgdata

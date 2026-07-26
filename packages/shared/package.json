@@ -1,0 +1,6 @@
+{
+  "name": "@rankati/shared",
+  "private": true,
+  "version": "0.0.0",
+  "types": "./src/index.ts"
+}

@@ -1,0 +1,16 @@
+{
+  // Type-checks the tests, which tsconfig.json deliberately does not.
+  //
+  // `include: ["src/**/*"]` there is correct — `nest build` must not emit test files into
+  // dist. But it meant `tsc --noEmit` silently skipped test/, so a test could reference a
+  // type that no longer existed and only fail when it ran. Vitest strips types with
+  // esbuild without checking them, so nothing else was catching it either.
+  //
+  // Used by `pnpm typecheck`. Emits nothing; it exists to make the tests answerable to
+  // the same compiler as the code they test.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

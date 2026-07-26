@@ -1,0 +1,492 @@
+/*
+ * Tailwind v4 is CSS-first: this single @import replaces v3's tailwind.config.js,
+ * postcss.config.js and autoprefixer. The absence of those files is DELIBERATE.
+ *
+ * Almost every Tailwind tutorial (and most LLM answers) still describes the v3 setup.
+ * If you arrived from those and are about to "fix" this by adding a config file and a
+ * PostCSS pipeline: don't. It is correct as-is and that would break it. See ADR 0030.
+ */
+@import 'tailwindcss';
+
+/*
+ * Make `dark:` follow a CLASS, not the operating system (ADR 0051).
+ *
+ * Out of the box, Tailwind 4's `dark` variant compiles to `@media (prefers-color-scheme:
+ * dark)` — it obeys the OS and nothing else. Rankati defaults to dark and remembers your toggle,
+ * so the variant is redefined to key off `.dark` on <html>. Removing this makes light/dark
+ * silently follow the OS instead of the toggle.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * SEMANTIC COLOUR TOKENS (ADR 0062).
+ *
+ * Components name ROLES, never shades — `bg-canvas`, `text-muted`, `text-tier-critical`, not
+ * `bg-slate-100` / `text-red-700`. This @theme block maps each role to a runtime custom property
+ * (defined in :root / .dark below); Tailwind generates the utilities (`bg-canvas`, …) that read
+ * those properties. A THEME (v0.10 Step C) is then just a block that overrides the properties —
+ * colour becomes data, not surgery.
+ *
+ * TWO TIERS, and the split is the safety mechanism:
+ *   - PALETTE tokens (canvas … secondary) a theme varies freely.
+ *   - MEANING tokens (tier-* … positive) whose MEANING is fixed across themes — a theme may tune
+ *     a shade for contrast, but critical always reads hottest, overdue urgent (ADRs 0057, 0062).
+ * Meaning tokens live in the base layer; a theme overrides only palette tokens, so meaning cannot
+ * be recoloured by accident. Two meanings never share ONE token even when they share a value
+ * today (not-before / pin; overdue / error / danger) — merging couples unrelated things.
+ */
+@theme {
+  /*
+   * TYPOGRAPHY (ADR 0063) — the brand's Inter-first stack as the single UI baseline. Set here so
+   * BOTH Tailwind's `font-sans` utility and the base html/body font (via `--default-font-family`,
+   * which defaults to `var(--font-sans)`) resolve to Inter, self-hosted (imported in main.tsx).
+   * A THEME never changes this — typography is a baseline, not a palette (0062/0063). The brand's
+   * shouting headline treatment (font-black uppercase tracking-tighter italic) is deliberately NOT
+   * adopted: Rankati is a dense list scanned daily and the task titles are the content.
+   */
+  --font-sans: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+
+  /*
+   * SHAPE — the brand's radius scale as Rankati's single baseline (ADR 0063). Redefining Tailwind's
+   * own --radius-* here re-values every rounded-* utility (verified via compile probe) — no
+   * semantic-indirection layer, because shape never swaps at runtime the way colour does. A theme
+   * never changes these. Surfaces map by usage: chips/badges → sm, inputs/buttons → xl,
+   * cards/modals → 2xl, circles stay pill; tiny icon buttons take sm, not xl (size-relative rule).
+   */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+
+  /* palette */
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-subtle: var(--subtle);
+  --color-chip: var(--chip);
+  --color-hover: var(--hover);
+  --color-hover-strong: var(--hover-strong);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-backdrop: var(--backdrop);
+  --color-fg: var(--fg);
+  --color-strong: var(--strong);
+  --color-body: var(--body);
+  --color-strong-hover: var(--strong-hover);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-edge: var(--edge);
+  --color-divider: var(--divider);
+  --color-field: var(--field);
+  --color-field-bg: var(--field-bg);
+  /*
+   * control-bg — an OPAQUE surface for native <select>. The browser draws a select's option popup
+   * itself and can't render field-bg's translucency (it composites toward white), so selects need
+   * their own opaque token. Same class of split as not-before/pin sharing amber: inputs WANT
+   * translucent depth and have no popup; selects need opacity. CONTRACT: opaque in dark modes;
+   * may be transparent in light (the UA popup is light there anyway). See docs/THEMES.md.
+   */
+  --color-control-bg: var(--control-bg);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-secondary: var(--secondary); /* RESERVED, UNUSED — v0.11 brand adoption (ADR 0062) */
+
+  /* meaning — the tier heat ramp (ADR 0057), swatch (fill) + accent (text tint) */
+  --color-tier-normal: var(--tier-normal);
+  --color-tier-normal-accent: var(--tier-normal-accent);
+  --color-tier-important: var(--tier-important);
+  --color-tier-important-accent: var(--tier-important-accent);
+  --color-tier-super: var(--tier-super);
+  --color-tier-super-accent: var(--tier-super-accent);
+  --color-tier-critical: var(--tier-critical);
+  --color-tier-critical-accent: var(--tier-critical-accent);
+
+  /* meaning — the rest */
+  --color-overdue: var(--overdue);
+  --color-overdue-edge: var(--overdue-edge);
+  --color-not-before: var(--not-before);
+  --color-not-before-edge: var(--not-before-edge);
+  --color-notice: var(--notice);
+  --color-pin: var(--pin);
+  --color-pin-edge: var(--pin-edge);
+  --color-pin-label: var(--pin-label);
+  --color-pending: var(--pending);
+  --color-pending-track: var(--pending-track);
+  --color-error: var(--error);
+  --color-error-bg: var(--error-bg);
+  --color-error-edge: var(--error-edge);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-positive: var(--positive);
+}
+
+/*
+ * The DEFAULT theme = today's slate palette, reproduced BY CONSTRUCTION: each token references
+ * Tailwind's own colour (`var(--color-slate-100)`), so the values ARE the originals — the sweep's
+ * "nothing changed" is true by definition, not by a table of hand-copied hexes (ADR 0062).
+ * (Verified: Tailwind 4.3.2 emits `--color-*` for any shade referenced via var().)
+ *
+ * :root = light. `.dark` (the class 0051 puts on <html>) overrides for dark; equal specificity,
+ * so source order wins and .dark must follow :root. Only tokens that DIFFER in dark are repeated.
+ */
+:root {
+  --canvas: var(--color-slate-100);
+  --card: var(--color-white);
+  --subtle: var(--color-slate-50);
+  --chip: var(--color-slate-100);
+  --hover: var(--color-slate-100);
+  --hover-strong: var(--color-slate-200);
+  --surface-hover: var(--color-slate-100);
+  --surface-active: var(--color-slate-200);
+  --backdrop: color-mix(in oklab, var(--color-slate-900) 50%, transparent);
+  --fg: var(--color-slate-900);
+  --strong: var(--color-slate-700);
+  --body: var(--color-slate-600);
+  --strong-hover: var(--color-slate-700);
+  --muted: var(--color-slate-500);
+  --faint: var(--color-slate-400);
+  --edge: var(--color-slate-200);
+  --divider: var(--color-slate-200);
+  --field: var(--color-slate-300);
+  --field-bg: transparent;
+  --control-bg: transparent; /* light: the UA popup is light, dark text reads on it */
+  --primary: var(--color-slate-900);
+  --on-primary: var(--color-white);
+  --secondary: var(--color-slate-900); /* reserved: a value so a theme can override, no consumer */
+
+  --tier-normal: var(--color-slate-300);
+  --tier-normal-accent: var(--color-slate-400);
+  --tier-important: var(--color-yellow-400);
+  --tier-important-accent: var(--color-yellow-500);
+  --tier-super: var(--color-orange-500);
+  --tier-super-accent: var(--color-orange-500);
+  --tier-critical: var(--color-red-600);
+  --tier-critical-accent: var(--color-red-600);
+
+  --overdue: var(--color-red-700);
+  --overdue-edge: var(--color-red-200);
+  --not-before: var(--color-amber-700);
+  --not-before-edge: var(--color-amber-200);
+  --notice: var(--color-amber-700);
+  --pin: var(--color-amber-500);
+  --pin-edge: var(--color-amber-400);
+  --pin-label: var(--color-amber-700);
+  --pending: var(--color-orange-500);
+  --pending-track: color-mix(in oklab, var(--color-orange-500) 15%, transparent);
+  --error: var(--color-red-700);
+  --error-bg: var(--color-red-50);
+  --error-edge: var(--color-red-200);
+  --danger: var(--color-red-700);
+  --danger-bg: var(--color-red-50);
+  --positive: var(--color-emerald-700);
+}
+
+.dark {
+  --canvas: var(--color-slate-950);
+  --card: var(--color-slate-900);
+  --subtle: var(--color-slate-800);
+  --chip: var(--color-slate-800);
+  --hover: var(--color-slate-800);
+  --hover-strong: var(--color-slate-800);
+  --surface-hover: var(--color-slate-700);
+  --surface-active: var(--color-slate-700);
+  --backdrop: color-mix(in oklab, var(--color-black) 60%, transparent);
+  --fg: var(--color-slate-100);
+  --strong: var(--color-slate-300);
+  --body: var(--color-slate-300);
+  --strong-hover: var(--color-slate-200);
+  --muted: var(--color-slate-400);
+  --faint: var(--color-slate-500);
+  --edge: var(--color-slate-800);
+  --divider: var(--color-slate-700);
+  --field: var(--color-slate-600);
+  --field-bg: var(--color-slate-800);
+  --control-bg: var(--color-slate-800); /* opaque — unchanged from field-bg here (slate's luck) */
+  --primary: var(--color-slate-100);
+  --on-primary: var(--color-slate-900);
+  --secondary: var(--color-slate-100);
+
+  --tier-normal: var(--color-slate-600);
+  --tier-normal-accent: var(--color-slate-500);
+  --tier-super-accent: var(--color-orange-400);
+  --tier-critical-accent: var(--color-red-500);
+
+  --overdue: var(--color-red-300);
+  --overdue-edge: var(--color-red-900);
+  --not-before: var(--color-amber-300);
+  --not-before-edge: var(--color-amber-900);
+  --notice: var(--color-amber-300);
+  --pin: var(--color-amber-400);
+  --pin-label: var(--color-amber-300);
+  --pending: var(--color-orange-400);
+  --error: var(--color-red-300);
+  --error-bg: var(--color-red-950);
+  --error-edge: var(--color-red-900);
+  --danger: var(--color-red-300);
+  --danger-bg: var(--color-red-950);
+  --positive: var(--color-emerald-400);
+}
+
+/*
+ * THEME 2 — BRAND (ADR 0062, v0.10 Step B). PALETTE tokens only; meaning tokens inherit the base
+ * layer (:root / .dark) so tier heat, overdue, error etc. keep their meaning — a theme tunes
+ * surfaces, not signals.
+ *
+ * Both blocks set the FULL palette on purpose. `[data-theme="brand"].dark` (specificity 0,2,0)
+ * outranks `[data-theme="brand"]` (0,1,0) in dark mode; if the light block set a token the dark
+ * block omitted, that light value would leak into dark mode. Complete + parallel avoids it.
+ *
+ * NINE tokens are from the brand spec (canvas, card, subtle, fg, muted, faint, edge, primary,
+ * secondary). The other THIRTEEN are DERIVED from it — the spec writes dark neutrals as white
+ * overlays (subtle 5%, edge 10%), so the rest follow that idiom at graded opacity; text stays on
+ * the spec's cool ramp (white → slate). Provenance is recorded in docs/THEMES.md (Step E).
+ * `secondary` (and the #F472B6 primary echo) remain reserved and unused.
+ */
+[data-theme='brand'] {
+  --canvas: #f8fafc;
+  --card: #ffffff;
+  --subtle: var(--color-slate-100);
+  --chip: var(--color-slate-100);
+  --hover: var(--color-slate-100);
+  --hover-strong: var(--color-slate-200);
+  --surface-hover: var(--color-slate-100);
+  --surface-active: var(--color-slate-200);
+  --backdrop: color-mix(in oklab, var(--color-slate-900) 50%, transparent);
+  --fg: var(--color-slate-900);
+  --strong: var(--color-slate-700);
+  --body: var(--color-slate-600);
+  --strong-hover: var(--color-slate-700);
+  --muted: var(--color-slate-500);
+  --faint: var(--color-slate-400);
+  --edge: var(--color-slate-200);
+  --divider: var(--color-slate-200);
+  --field: var(--color-slate-300);
+  --field-bg: transparent;
+  --control-bg: transparent;
+  --primary: #e62e8a;
+  --on-primary: var(--color-white);
+  --secondary: #6b21a8; /* reserved, unused */
+}
+
+[data-theme='brand'].dark {
+  --canvas: #1a102e;
+  --card: #2d1b4e;
+  --subtle: rgb(255 255 255 / 0.05); /* spec */
+  --chip: rgb(255 255 255 / 0.08); /* derived */
+  --hover: rgb(255 255 255 / 0.08); /* derived */
+  --hover-strong: rgb(255 255 255 / 0.12); /* derived */
+  --surface-hover: rgb(255 255 255 / 0.1); /* derived */
+  --surface-active: rgb(255 255 255 / 0.14); /* derived */
+  --backdrop: color-mix(in oklab, var(--color-black) 60%, transparent);
+  --fg: #ffffff; /* spec */
+  --strong: var(--color-slate-300); /* derived — cool text ramp, matches spec's slate muted/faint */
+  --body: var(--color-slate-300); /* derived */
+  --strong-hover: var(--color-slate-200); /* derived */
+  --muted: var(--color-slate-400); /* spec */
+  --faint: var(--color-slate-500); /* spec */
+  --edge: rgb(255 255 255 / 0.1); /* spec */
+  --divider: rgb(255 255 255 / 0.1); /* derived */
+  --field: rgb(255 255 255 / 0.2); /* derived — input border must stay visible */
+  --field-bg: rgb(255 255 255 / 0.05); /* derived */
+  --control-bg: color-mix(in srgb, #ffffff 5%, var(--card)); /* opaque twin of field-bg — see @theme */
+  --primary: #e62e8a; /* spec — both modes */
+  --on-primary: #ffffff;
+  --secondary: #6b21a8; /* reserved, unused */
+}
+
+/*
+ * THEME 4 — WARM (ADR 0062, v0.10 Step C). A warm identity, distinct from cool Slate and
+ * magenta Brand: the whole neutral ramp is Tailwind's `stone` (warm grey) in place of `slate`,
+ * paired with a cool `teal` primary — teal avoids every meaning hue (red/orange/yellow/amber),
+ * so it can't be mistaken for a signal. This is a pure stone-for-slate swap of the base palette,
+ * so it stays byte-honest by referencing Tailwind's own --color-stone-* / --color-teal-*.
+ * Meaning tokens inherit the base layer (verify amber/yellow on the stone canvas at eye-check).
+ */
+[data-theme='warm'] {
+  --canvas: var(--color-stone-100);
+  --card: var(--color-white);
+  --subtle: var(--color-stone-50);
+  --chip: var(--color-stone-100);
+  --hover: var(--color-stone-100);
+  --hover-strong: var(--color-stone-200);
+  --surface-hover: var(--color-stone-100);
+  --surface-active: var(--color-stone-200);
+  --backdrop: color-mix(in oklab, var(--color-stone-900) 50%, transparent);
+  --fg: var(--color-stone-900);
+  --strong: var(--color-stone-700);
+  --body: var(--color-stone-600);
+  --strong-hover: var(--color-stone-700);
+  --muted: var(--color-stone-500);
+  --faint: var(--color-stone-400);
+  --edge: var(--color-stone-200);
+  --divider: var(--color-stone-200);
+  --field: var(--color-stone-300);
+  --field-bg: transparent;
+  --control-bg: transparent;
+  --primary: var(--color-teal-600);
+  --on-primary: var(--color-white);
+  --secondary: var(--color-stone-900); /* reserved, unused */
+}
+
+[data-theme='warm'].dark {
+  --canvas: var(--color-stone-950);
+  --card: var(--color-stone-900);
+  --subtle: var(--color-stone-800);
+  --chip: var(--color-stone-800);
+  --hover: var(--color-stone-800);
+  --hover-strong: var(--color-stone-800);
+  --surface-hover: var(--color-stone-700);
+  --surface-active: var(--color-stone-700);
+  --backdrop: color-mix(in oklab, var(--color-black) 60%, transparent);
+  --fg: var(--color-stone-100);
+  --strong: var(--color-stone-300);
+  --body: var(--color-stone-300);
+  --strong-hover: var(--color-stone-200);
+  --muted: var(--color-stone-400);
+  --faint: var(--color-stone-500);
+  --edge: var(--color-stone-800);
+  --divider: var(--color-stone-700);
+  --field: var(--color-stone-600);
+  --field-bg: var(--color-stone-800);
+  --control-bg: var(--color-stone-800); /* opaque — unchanged from field-bg here (inherited luck) */
+  --primary: var(--color-teal-400);
+  --on-primary: var(--color-stone-900);
+  --secondary: var(--color-stone-100); /* reserved, unused */
+}
+
+/*
+ * THEME 3 — CLEAR (ADR 0062, v0.10 Step C) — the colour-blind-safe theme. Two honest,
+ * complementary moves; NEITHER claims to solve CVD (see docs/THEMES.md — a colour-blind viewer
+ * is the acceptance test, not a simulator):
+ *
+ *   1. RETINT (here): the chrome is Slate's, with a universally-safe BLUE primary. The tier heat
+ *      swatches are re-spaced to be MONOTONIC IN LIGHTNESS — important lightest (yellow-300),
+ *      critical darkest (red-700) — because lightness survives red-green colour-blindness even
+ *      when hue collapses. Accents are tuned darker for text legibility. ONLY the tier meaning
+ *      tokens named below are touched; overdue/not-before keep their meaning (and their ⚑/⧗
+ *      glyphs already separate them without colour).
+ *   2. SHAPE CUE (below): retint alone leaves the row's 8px tier DOT colour-only. Under this theme
+ *      the dot is shape-coded from its `data-tier` attribute — circle / diamond / triangle — a
+ *      non-colour channel that works at that size. Scoped to [data-theme='clear']; no other theme
+ *      changes. The attribute itself is an unconditional improvement: the tier is now
+ *      machine-readable in the DOM, not inferable only from a colour class.
+ */
+[data-theme='clear'] {
+  --primary: var(--color-blue-600);
+  --tier-important: var(--color-yellow-300);
+  --tier-important-accent: var(--color-yellow-600);
+  --tier-critical: var(--color-red-700);
+  --tier-critical-accent: var(--color-red-700);
+}
+
+[data-theme='clear'].dark {
+  --primary: var(--color-blue-400);
+  --tier-important: var(--color-yellow-300);
+  --tier-important-accent: var(--color-yellow-500);
+  --tier-critical: var(--color-red-600);
+  --tier-critical-accent: var(--color-red-500);
+}
+
+/*
+ * CLEAR's non-colour tier cue. The row dot (TaskRow) carries `data-tier`; here — and ONLY here —
+ * each elevated tier gets a distinct silhouette. Slightly enlarged so the shape is legible at
+ * this size. `important` stays the plain circle; `super_important` becomes a diamond; `critical`
+ * becomes a triangle. Colour still rides along (retint above), so the cue is triple-coded:
+ * hue + lightness + shape.
+ */
+[data-theme='clear'] [data-tier] {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+[data-theme='clear'] [data-tier='super_important'] {
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+[data-theme='clear'] [data-tier='critical'] {
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/*
+ * The branded GLOW (ADR 0063) — a soft halo for a primary CTA, written as a bespoke class rather
+ * than a Tailwind shadow utility on purpose: Tailwind's shadow machinery extracts the colour and
+ * DROPS the color-mix (it renders the solid primary, not the 35% halo), so the box-shadow is set
+ * directly here. PRIMARY-DERIVED via var(--primary) — magenta in Brand, teal in Warm, blue in
+ * Clear; it never injects brand colour into another theme. Rare by design: emphasis only.
+ */
+.deck-glow {
+  box-shadow: 0 0 20px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+
+/*
+ * The signature GRADIENT BAR (ADR 0063) — the brand MARK. Hardcoded brand hexes, deliberately NO
+ * var()/token: a mark does not recolour. BRAND-ONLY: shown under [data-theme='brand'] and simply
+ * absent on Slate/Warm/Clear — the eye-check found a fixed-magenta bar reads as an orphan on a
+ * themed interface, so a mark must also be ABSENT where it doesn't belong, not just un-recoloured.
+ * Not rendered elsewhere (never a per-theme gradient — that would make it a themed surface). Purely
+ * decorative (aria-hidden), which is why add/remove-per-theme is legitimate here (0063).
+ */
+.deck-brandbar {
+  display: none;
+  background-image: linear-gradient(to right, #6b21a8, #e62e8a, #f472b6);
+}
+[data-theme='brand'] .deck-brandbar {
+  display: block;
+}
+
+/*
+ * The tick's undo ring (ADR 0055) — winds down around the done-circle for the grace period.
+ * DURATION is set inline from TICK_GRACE_MS (JS is the single source of "15 seconds"); `forwards`
+ * holds the empty state until the commit lands. No colour here — the ring's stroke is a token,
+ * set on the element.
+ */
+@keyframes deck-ring-wind-down {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--deck-ring-circumference);
+  }
+}
+
+.deck-ring {
+  animation-name: deck-ring-wind-down;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+/*
+ * The pending countdown BAR (ADR 0055 addendum) — the same grace period as the ring. It drains
+ * right-to-left via transform (compositor, not width); duration and position are set inline from
+ * the deadline so the two read one clock.
+ */
+@keyframes deck-bar-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.deck-bar {
+  transform-origin: left;
+  animation-name: deck-bar-drain;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+/* Reduced motion: the ring and bar hold full for the window — the MEANING without the movement.
+   The undo still works; only the animation stops. */
+@media (prefers-reduced-motion: reduce) {
+  .deck-ring,
+  .deck-bar {
+    animation: none;
+  }
+}

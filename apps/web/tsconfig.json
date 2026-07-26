@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Vite is ESM + bundler resolution — the opposite of apps/api's CommonJS.
+    // This is exactly why tsconfig.base.json sets no module/moduleResolution
+    // (ADR 0034), and why @rankati/shared stays types-only (ADR 0041).
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts"]
+}
