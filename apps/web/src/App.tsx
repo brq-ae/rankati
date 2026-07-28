@@ -1217,7 +1217,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.30.1 — the logo</p>
+            <p className="text-sm text-muted">v0.31.0 — the Telegram bot</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is

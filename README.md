@@ -52,6 +52,22 @@ screen** — pick your username and password, and you're in.
 See [`docs/INSTALL.md`](docs/INSTALL.md) for the full deployment notes (reverse proxy, first-run, and the
 recovery commands).
 
+## Telegram bot (optional)
+
+Capture and act on your tasks from Telegram, without opening the web app. It runs inside `rankati-api` by polling Telegram — no extra container, and nothing new to expose.
+
+1. In Telegram, message **@BotFather**, create a bot, and copy its **token**.
+2. In Rankati, open **Settings → Telegram**, paste the token, and **Connect**.
+3. Copy the **link code** it shows and send it to your bot in Telegram to bind your chat (one-time; only that chat is served).
+
+Then, from your chat:
+
+- **Text the bot anything** (or `/add buy milk`) to capture it as a task in an **Inbox** list — with buttons to file it into another list or **🗑 discard** it.
+- **`/today`** deals your top tasks and **`/now`** shows the top one, each with a **✓ Done** button.
+- Optionally enable a **daily digest** (a time + your timezone) to have today's tasks pushed to you each morning.
+
+Your token is stored on your own server, shown masked, and never logged.
+
 ## Requirements
 
 - **Docker** + Docker Compose.

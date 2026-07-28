@@ -76,6 +76,15 @@ The endpoints that exist **today**. This table grows one milestone at a time; it
 | `POST` | `/api/routines/:id/did` | `{ on }` | `Routine` (frequency +1 / floating resets clock) |
 | `POST` | `/api/routines/:id/dismiss` | `{ on }` | `Routine` (fixed only) |
 | `POST` | `/api/routines/:id/snooze` | `{ until }` | `Routine` (display-only hide-until) |
+| `GET` | `/api/telegram/config` | — | `TelegramConfigDto` (masked; the raw token is never returned) |
+| `GET` | `/api/telegram/status` | — | `TelegramStatusDto` (`running`/`error`/`stopped` poller health) |
+| `PUT` | `/api/telegram/token` | `SetTelegramTokenDto` | `TelegramConfigDto` (starts/restarts the poller) |
+| `DELETE` | `/api/telegram/token` | — | `TelegramConfigDto` (clears the token, unbinds, stops the poller) |
+| `POST` | `/api/telegram/link-code` | — | `TelegramConfigDto` (issues a fresh one-time binding code) |
+| `POST` | `/api/telegram/unlink` | — | `TelegramConfigDto` (unbinds the chat, re-issues a code) |
+| `PUT` | `/api/telegram/digest` | `UpdateTelegramDigestDto` | `TelegramConfigDto` (enabling requires a timezone) |
+
+The Telegram bot is bundled in `rankati-api` and reaches Telegram by long-polling — it adds no container and no inbound port; the routes above are the web app's Settings surface.
 
 Three rules hold across all of it:
 

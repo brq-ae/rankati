@@ -91,7 +91,11 @@ function stubFetch(): void {
     vi.fn((input: string) => {
       const url = String(input);
       if (url.includes('/api/auth/status')) return Promise.resolve(authStatusResponse());
-      const body = url.includes('/api/locations')
+      const body = url.includes('/api/telegram/status')
+        ? { status: 'stopped' }
+        : url.includes('/api/telegram')
+        ? { configured: false, tokenMask: null, bound: false, boundChatId: null, linkCode: null, digestEnabled: false, digestTime: '08:00', timezone: null }
+        : url.includes('/api/locations')
         ? []
         : url.includes('/api/lists')
           ? LISTS

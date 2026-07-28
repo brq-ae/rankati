@@ -1,6 +1,7 @@
 import type { Location } from '@rankati/shared';
 import { useEffect, useRef, useState } from 'react';
 import ChangePasswordForm from './ChangePasswordForm';
+import TelegramSettings from './TelegramSettings';
 import { DEFAULT_THRESHOLDS, type Thresholds } from './effort-prefs';
 import type { PinDays } from './pin';
 import type { Mode } from './mode';
@@ -416,6 +417,10 @@ export default function SettingsModal({
             </div>
           )}
         </div>
+
+        {/* Telegram bot (ADR 0084) — self-contained: reads/writes the authed endpoints itself, so it needs
+            no props threaded through App. */}
+        <TelegramSettings />
 
         {/* Reset (ADR 0064). Two named intents, not a checkbox matrix — "Keep sample data" is one
             clearly-labelled option on the one mode it applies to. These are TRIGGERS ONLY: each hands

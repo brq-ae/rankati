@@ -5,6 +5,20 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-07-28
+
+**The Telegram bot** — capture and act on your tasks from Telegram, without opening the web app. It runs inside `rankati-api` by polling Telegram: no extra container, and nothing new to expose. Migration-bearing (the api applies it automatically on boot).
+
+### Added
+
+- **Connect your own bot** — create one with @BotFather, paste the token in **Settings → Telegram**, and send the shown link code to bind your chat. Only that one chat is served.
+- **Capture by texting** — any message (or `/add …`) becomes a task in an **Inbox** list, with buttons to re-file it into another list or **🗑 discard** it.
+- **`/today` and `/now`** — your top tasks and the single top task, each with a **✓ Done** button.
+- **Daily digest** — optionally push today's tasks to your chat at a time and timezone you choose.
+- **Settings → Telegram** — manage the token (masked), link code, bound chat, and digest, with a live connected / not-connected health indicator.
+
+Your bot token is stored on your own server, shown masked, and never written to logs.
+
 ## [0.30.1] — 2026-07-26
 
 **The Rankati logo** — the brand logo now ships as the browser favicon, the PWA install icons, and atop the

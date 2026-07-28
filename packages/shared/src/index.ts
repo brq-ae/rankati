@@ -612,3 +612,53 @@ export interface RoutineActionDto {
 export interface RoutineSnoozeDto {
   until: string;
 }
+
+// ---- Telegram bot config (ADR 0084) ----
+
+/**
+ * The browser-safe view of the Telegram config. It NEVER carries the raw bot token — only the masked
+ * tail (ADR 0084). The raw token leaves the server only to Telegram, never to a client.
+ */
+export interface TelegramConfigDto {
+  /** A bot token is stored. */
+  configured: boolean;
+  /** The token's masked tail, e.g. "••••1234", or null when unconfigured. Never the raw token. */
+  tokenMask: string | null;
+  /** A Telegram chat is bound. */
+  bound: boolean;
+  /** The bound chat id (for display), or null when unbound. */
+  boundChatId: string | null;
+  /** The one-time binding code to send from Telegram, or null when none is issued. */
+  linkCode: string | null;
+  /** Daily digest on/off. */
+  digestEnabled: boolean;
+  /** Digest local send time, "HH:MM". */
+  digestTime: string;
+  /** The IANA timezone the digest fires on, or null when unset. */
+  timezone: string | null;
+}
+
+/**
+ * The long-poller's health (Step 8): 'running' = connected; 'error' = a token is stored but Telegram
+ * rejected it (not silently dead); 'stopped' = no token. Read from GET /telegram/status.
+ */
+export type TelegramBotStatus = 'running' | 'error' | 'stopped';
+
+/** GET /telegram/status — whether the poller is actually live (Step 8). */
+export interface TelegramStatusDto {
+  status: TelegramBotStatus;
+}
+
+/** PUT /telegram/token — paste the BotFather token (ADR 0084). */
+export interface SetTelegramTokenDto {
+  token: string;
+}
+
+/** PUT /telegram/digest — the daily-digest preferences. Enabling requires a timezone (ADR 0084). */
+export interface UpdateTelegramDigestDto {
+  enabled: boolean;
+  /** "HH:MM", 00:00–23:59. */
+  time: string;
+  /** An IANA timezone name, e.g. "Asia/Dubai"; null clears it. */
+  timezone: string | null;
+}

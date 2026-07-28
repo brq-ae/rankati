@@ -46,6 +46,17 @@ account. Two implications:
 **Trust this device** on the login/create-account screen keeps you signed in for **30 days**; leave it
 unticked on a shared or public machine and the session ends when the browser closes.
 
+## Telegram bot (optional)
+
+Rankati can connect to a Telegram bot **you** own — it runs inside the `rankati-api` container by polling Telegram, so it adds no container and no inbound port.
+
+1. Create a bot with **@BotFather** in Telegram and copy its token.
+2. In Rankati, **Settings → Telegram** → paste the token → **Connect**. The badge shows whether the bot is connected.
+3. Send the shown **link code** to your bot to bind your chat (one-time; only that chat is served).
+4. Optionally turn on the **daily digest** — a send time plus your timezone.
+
+Capture by texting the bot; read with `/today` and `/now`; complete with the ✓ buttons. The token is stored on your server (masked in the UI, never logged).
+
 ## Recovery — run on the box, no email
 
 There is no email-based password reset. Both escapes are **operator commands** run on the host, and
@@ -65,3 +76,12 @@ docker compose exec api node dist/auth-admin.js --unlock
 ```
 
 Server access is the guard for both — that is why neither needs a typed-DELETE confirmation.
+
+## Upgrading
+
+Pull the new images and bring the stack back up — the api applies any database migrations automatically on boot:
+
+```
+docker compose pull
+docker compose up -d
+```

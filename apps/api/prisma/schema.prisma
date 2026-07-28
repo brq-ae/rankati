@@ -420,3 +420,36 @@ model Session {
 
   @@index([accountId])
 }
+
+/// The single-user Telegram bot config (ADR 0084) — Rankati's FIRST server-side persistent setting (every
+/// other setting is client localStorage). ONE owner-scoped row, lazily upserted. Holds the own-bot token
+/// (plaintext at rest — acceptable for single-user; masked in the UI, never logged), the bound chat, the
+/// one-time link code, and the daily-digest preferences including the server-known IANA timezone the
+/// scheduler fires on (the reads stay clock-free — 0052/0070 — so the digest carries its own tz).
+model TelegramConfig {
+  id String @id @default(uuid())
+  /// Single local owner (ADRs 0026, 0039) — one row per owner, enforced unique so the upsert is by owner.
+  ownerId String @unique @default("local")
+
+  /// The BotFather token. NULL = not configured. Plaintext (single-user, 0084); masked in the UI, never
+  /// logged (the getUpdates URL carries it, so the URL must never be logged either).
+  botToken String?
+  /// The bound Telegram chat id, as a string. NULL = unbound; once set the bot serves only this chat.
+  boundChatId String?
+  /// The one-time binding code shown in Settings — the bot binds to the first chat that sends it. NULL =
+  /// none issued (no token yet, or bound).
+  linkCode String?
+
+  /// Daily digest (0084): off by default; a plain "HH:MM" local send time; the IANA timezone it fires on
+  /// (NULL until set — required before the digest can be enabled).
+  digestEnabled Boolean @default(false)
+  digestTime    String  @default("08:00")
+  timezone      String?
+  /// The local date (YYYY-MM-DD) the digest last fired for — the fire-once-per-day guard (0084, Step 7).
+  /// NULL = never sent. Set ONLY on a successful send, so a restart never re-sends and a failed send retries.
+  lastDigestSentOn String?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}

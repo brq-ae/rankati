@@ -27,6 +27,13 @@ import { RoutinesController } from './routines/routines.controller';
 import { RoutinesService } from './routines/routines.service';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { TelegramController } from './telegram/telegram.controller';
+import { TELEGRAM_BOT_FACTORY, defaultBotFactory } from './telegram/telegram-bot.factory';
+import { TelegramBotService } from './telegram/telegram-bot.service';
+import { TelegramCaptureService } from './telegram/telegram-capture.service';
+import { TelegramConfigService } from './telegram/telegram-config.service';
+import { TelegramDigestService } from './telegram/telegram-digest.service';
+import { TelegramReadService } from './telegram/telegram-read.service';
 
 @Module({
   imports: [
@@ -51,6 +58,7 @@ import { TasksService } from './tasks.service';
     ResetController,
     RoutinesController,
     ChecklistController,
+    TelegramController,
   ],
   providers: [
     PrismaService,
@@ -67,6 +75,12 @@ import { TasksService } from './tasks.service';
     ResetService,
     RoutinesService,
     ChecklistService,
+    TelegramConfigService,
+    TelegramCaptureService,
+    TelegramReadService,
+    TelegramBotService,
+    TelegramDigestService,
+    { provide: TELEGRAM_BOT_FACTORY, useValue: defaultBotFactory },
     // Global guards (ADR 0076). CSRF runs first — a forged cross-origin mutation is rejected before
     // any session work — then the session gate puts every non-@Public route behind a valid session.
     { provide: APP_GUARD, useClass: CsrfGuard },

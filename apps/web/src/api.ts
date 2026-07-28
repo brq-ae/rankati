@@ -19,10 +19,13 @@ import type {
   CreateRequiredTaskDto,
   Effort,
   Task,
+  TelegramConfigDto,
+  TelegramStatusDto,
   UpdateChecklistItemDto,
   UpdateListDto,
   UpdateLocationDto,
   UpdateTaskDto,
+  UpdateTelegramDigestDto,
 } from '@rankati/shared';
 
 /**
@@ -316,3 +319,28 @@ export async function changePassword(dto: {
   });
   return res.ok ? { ok: true } : { ok: false, status: res.status };
 }
+
+// ---- Telegram bot settings (ADR 0084, Step 8) — thin wrappers over the authed endpoints. ----
+
+export const getTelegramConfig = (): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/config');
+
+/** The poller's live health — polled after a token change to settle the "connected/rejected" badge. */
+export const getTelegramStatus = (): Promise<TelegramStatusDto> =>
+  request<TelegramStatusDto>('/api/telegram/status');
+
+export const setTelegramToken = (token: string): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/token', { method: 'PUT', body: JSON.stringify({ token }) });
+
+/** Remove the bot token — unbinds + stops the poller (confirm in the UI first). */
+export const deleteTelegramToken = (): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/token', { method: 'DELETE' });
+
+export const regenerateTelegramCode = (): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/link-code', { method: 'POST' });
+
+export const unlinkTelegram = (): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/unlink', { method: 'POST' });
+
+export const setTelegramDigest = (dto: UpdateTelegramDigestDto): Promise<TelegramConfigDto> =>
+  request<TelegramConfigDto>('/api/telegram/digest', { method: 'PUT', body: JSON.stringify(dto) });
