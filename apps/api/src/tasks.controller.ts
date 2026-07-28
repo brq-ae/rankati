@@ -11,12 +11,16 @@ import {
 } from '@nestjs/common';
 import type { CreateRequiredTaskDto, CreateTaskDto, Task, UpdateTaskDto } from '@rankati/shared';
 import { LOCAL_OWNER_ID } from './constants';
+import { PinSnoozeService } from './pin-snooze.service';
 import { TasksService } from './tasks.service';
 
 /** Served at /api/tasks — the global prefix applies everywhere (ADR 0042). */
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly pinSnooze: PinSnoozeService,
+  ) {}
 
   /** `?sort=rating` gives the ranked list the Arena earns (ADRs 0003, 0047). */
   @Get()
@@ -95,6 +99,25 @@ export class TasksController {
   @Patch(':id/complete')
   complete(@Param('id') id: string): Promise<Task> {
     return this.tasks.complete(id);
+  }
+
+  /**
+   * Snooze the task's impact pin (ADR 0086) — hides the fired pin for its level's span. Returns the updated
+   * task so the pin recomputes from the read. 404 a stale/foreign id; 400 a None-impact task (no pin to snooze).
+   */
+  @Post(':id/pin-snooze')
+  @HttpCode(200)
+  async snoozePin(@Param('id') id: string): Promise<Task> {
+    await this.pinSnooze.snooze(id);
+    return this.tasks.findOne(id);
+  }
+
+  /** Clear the task's pin snooze (ADR 0086). Returns the updated task. */
+  @Delete(':id/pin-snooze')
+  @HttpCode(200)
+  async unsnoozePin(@Param('id') id: string): Promise<Task> {
+    await this.pinSnooze.unsnooze(id);
+    return this.tasks.findOne(id);
   }
 
   /**

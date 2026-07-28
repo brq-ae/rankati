@@ -46,15 +46,7 @@ import {
   storeHeldIds,
 } from './hand';
 import { comingUp } from './coming-up';
-import {
-  type PinDays,
-  computePin,
-  readPinDays,
-  readSnoozes,
-  snoozeSpanMs,
-  storePinDays,
-  storeSnoozes,
-} from './pin';
+import { type PinDays, computePin, snoozeSpanMs, DEFAULT_PIN_DAYS } from './pin';
 import type { HeadOutGroup } from './TodayView';
 import { TICK_GRACE_MS } from './tick';
 import {
@@ -73,11 +65,15 @@ import {
   deleteTask,
   getLists,
   getLocations,
+  getPinConfig,
   getRankedTasks,
   getTodayTasks,
   getUpcomingTasks,
   mergeLocations,
   resetApp,
+  setPinConfig,
+  snoozePin,
+  unsnoozePin,
   updateChecklistItem,
   updateList,
   updateLocation,
@@ -127,12 +123,11 @@ export default function App() {
    */
   const [heldIds, setHeldIds] = useState<string[] | null>(() => readHeldIds());
   const [handSize, setHandSize] = useState<number>(() => readHandSize());
-  /** The impact-pin snooze map (ADR 0075) — { taskId: snoozedUntil (epoch ms) }, client-side like the
-   *  hand. A dismissed pin is hidden until its span elapses, then computePin lets it return. */
-  const [snoozes, setSnoozes] = useState<Record<string, number>>(() => readSnoozes());
-  /** The four impact-pin day-knobs (ADR 0075) — the two fuses + two snooze spans, editable in Settings,
-   *  persisted client-side. Passed into computePin (fuses) and the snooze handler (spans). */
-  const [pinDays, setPinDays] = useState<PinDays>(() => readPinDays());
+  /** The four impact-pin day-knobs (ADRs 0075, 0086) — the two fuses + two snooze spans, now SERVER-side.
+   *  Fetched with the Today data (defaults until it arrives / on a failed fetch); passed to computePin
+   *  (fuses) + the snooze span. The snooze STATE is no longer a separate client map — it is derived from
+   *  each task's `pinSnoozedUntil`, which rides on every task read. */
+  const [pinDays, setPinDays] = useState<PinDays>(DEFAULT_PIN_DAYS);
   const [title, setTitle] = useState('');
   const [listId, setListId] = useState('');
   const [newListName, setNewListName] = useState('');
@@ -243,7 +238,7 @@ export default function App() {
    * than something a component remembers. Both come back ranked (0050).
    */
   async function refresh(): Promise<List[]> {
-    const [nextLists, nextTasks, nextToday, nextUpcoming, nextLocations] = await Promise.all([
+    const [nextLists, nextTasks, nextToday, nextUpcoming, nextLocations, nextPinConfig] = await Promise.all([
       getLists(),
       getRankedTasks(),
       // Day AND time: the full clock context both scored reads owe the server (0052, 0070) —
@@ -253,12 +248,16 @@ export default function App() {
       getTodayTasks(localDay(), localTime(), blockRef.current),
       getUpcomingTasks(localDay(), localTime()),
       getLocations(),
+      // Server-side pin config (ADR 0086), fetched in the same pass so the pin computes with it. A failed
+      // fetch falls back to the DEFAULTS so the pin still works rather than the whole load breaking.
+      getPinConfig().catch(() => DEFAULT_PIN_DAYS),
     ]);
     setLists(nextLists);
     setTasks(nextTasks);
     setToday(nextToday);
     setUpcoming(nextUpcoming);
     setLocations(nextLocations);
+    setPinDays(nextPinConfig);
     return nextLists;
   }
 
@@ -1084,11 +1083,19 @@ export default function App() {
   // Deal again does something only when there are empty slots AND more playable to pull in.
   const canDeal = hand.length < handSize && visibleToday.length > hand.length;
 
+  // The pin snooze STATE (ADR 0086) — derived from each task's pinSnoozedUntil (server-side), which rides
+  // on every read; no separate fetch or client store. A snoozed task is suppressed by computePin.
+  const snoozes = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of visibleToday) if (t.pinSnoozedUntil) m[t.id] = Date.parse(t.pinSnoozedUntil);
+    return m;
+  }, [visibleToday]);
+
   /**
-   * The impact safety-net pin (ADR 0075) — computed CLIENT-SIDE from what we already have: the
-   * playable set the hand is dealt from (`visibleToday`), the ids currently SHOWN in the hand (so a
-   * task already dealt never pins), and each task's declared impact + created date. One fires or none.
-   * Snooze is empty this slice (step 6). The pin drives nothing in the ranking — it only surfaces here.
+   * The impact safety-net pin (ADRs 0075, 0086) — computed CLIENT-SIDE from what we already have: the
+   * playable set the hand is dealt from (`visibleToday`), the ids currently SHOWN in the hand (so a task
+   * already dealt never pins), each task's declared impact + created date, plus the SERVER's config (fuses)
+   * and snoozes (derived above). One fires or none. It drives nothing in the ranking — it only surfaces here.
    */
   const pin = computePin(
     visibleToday.map((t) => ({ id: t.id, impact: t.impact, createdAt: Date.parse(t.createdAt) })),
@@ -1096,28 +1103,49 @@ export default function App() {
     hand.map((t) => t.id),
     snoozes, // a snoozed task is suppressed; the next-most-overdue takes its place
     Date.now(),
-    pinDays, // the configured fuses (highFuseDays / mediumFuseDays), editable in Settings
+    pinDays, // the server's configured fuses (highFuseDays / mediumFuseDays)
   );
   const pinTask = pin ? (visibleToday.find((t) => t.id === pin.id) ?? null) : null;
   // "high-impact · 8 days" — the level + how long it has been sitting (ADR 0075).
   const pinReason = pin ? `${pin.level}-impact · ${pin.ageDays} ${pin.ageDays === 1 ? 'day' : 'days'}` : '';
 
   /**
-   * Dismiss the shown pin for its level's span (ADR 0075) — High a day, Medium three. Writes the
-   * snooze (pruning expired entries), which suppresses this task in the next computePin; if another
-   * qualifier exists, the next-most-overdue pin appears. On expiry it returns — no extra logic.
+   * Dismiss the shown pin for its level's span (ADRs 0075, 0086). OPTIMISTIC: stamp the task's
+   * `pinSnoozedUntil` locally so the pin hides IMMEDIATELY (the derived snooze suppresses it; the
+   * next-most-overdue takes its place), then POST it — syncing the server's instant on success, reverting on
+   * failure. Dismissing a nag has no round-trip lag.
    */
   function onSnoozePin(): void {
     if (!pin) return;
-    const now = Date.now();
-    setSnoozes(storeSnoozes({ ...snoozes, [pin.id]: now + snoozeSpanMs(pin.level, pinDays) }, now));
+    const id = pin.id;
+    const stamp =
+      (value: string | null) =>
+      (t: Task): Task =>
+        t.id === id ? { ...t, pinSnoozedUntil: value } : t;
+    const optimistic = new Date(Date.now() + snoozeSpanMs(pin.level, pinDays)).toISOString();
+    setToday((prev) => prev.map(stamp(optimistic)));
+    setTasks((prev) => prev.map(stamp(optimistic)));
+    snoozePin(id)
+      .then((updated) => {
+        setToday((prev) => prev.map(stamp(updated.pinSnoozedUntil)));
+        setTasks((prev) => prev.map(stamp(updated.pinSnoozedUntil)));
+      })
+      .catch(() => {
+        setToday((prev) => prev.map(stamp(null)));
+        setTasks((prev) => prev.map(stamp(null)));
+      });
   }
 
-  /** Edit the four impact-pin day-knobs (ADR 0075) — persisted client-side; the pin recomputes with the
-   *  new fuses on the next render, and the next snooze uses the new spans. */
+  /**
+   * Edit the four impact-pin day-knobs (ADRs 0075, 0086) — saved SERVER-side. Reflect the server's VALIDATED
+   * result (a bad field defaulted to its own default, not the whole save rejected); revert on failure.
+   */
   function onSetPinDays(next: PinDays): void {
+    const previous = pinDays;
     setPinDays(next);
-    storePinDays(next);
+    setPinConfig(next)
+      .then(setPinDays)
+      .catch(() => setPinDays(previous));
   }
 
   /**
@@ -1217,7 +1245,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.31.0 — the Telegram bot</p>
+            <p className="text-sm text-muted">v0.32.0 — the shared pin</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is

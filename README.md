@@ -65,6 +65,7 @@ Then, from your chat:
 - **Text the bot anything** (or `/add buy milk`) to capture it as a task in an **Inbox** list — with buttons to file it into another list or **🗑 discard** it.
 - **`/today`** deals your top tasks and **`/now`** shows the top one, each with a **✓ Done** button.
 - Optionally enable a **daily digest** (a time + your timezone) to have today's tasks pushed to you each morning.
+- Your **most-neglected important task** leads `/today` and the digest as a ⚠️ **pin**, with **✓ Done** to complete it and **😴 Snooze** to hide it for a while — the same pin the web app shows, since its settings now live on the server.
 
 Your token is stored on your own server, shown masked, and never logged.
 

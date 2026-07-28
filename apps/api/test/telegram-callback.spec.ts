@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeDiscard,
   decodeDone,
+  decodePinSnooze,
   decodeRefile,
   encodeDiscard,
   encodeDone,
+  encodePinSnooze,
   encodeRefile,
   REFILE_BUTTON_CAP,
   selectRefileLists,
@@ -78,6 +80,26 @@ describe('discard callback_data codec (Step 8 polish)', () => {
     expect(decodeDiscard(encodeDone(A, 'today'))).toBeNull(); // a "d:" payload is not a discard
     expect(decodeDiscard(encodeRefile(A, B))).toBeNull(); // nor an "m:"
     expect(decodeDiscard('x:short')).toBeNull();
+  });
+});
+
+describe('pin-snooze callback_data codec (Step 6, ADR 0086)', () => {
+  it('packs one UUID into 24 bytes with a distinct "s:" prefix', () => {
+    const data = encodePinSnooze(A);
+    expect(data.startsWith('s:')).toBe(true);
+    expect(Buffer.byteLength(data, 'utf8')).toBe(24);
+  });
+
+  it('round-trips the task id', () => {
+    expect(decodePinSnooze(encodePinSnooze(A))).toBe(A);
+    expect(decodePinSnooze(encodePinSnooze(B))).toBe(B);
+  });
+
+  it('rejects malformed / wrong-family payloads with null', () => {
+    expect(decodePinSnooze('')).toBeNull();
+    expect(decodePinSnooze(encodeDiscard(A))).toBeNull(); // an "x:" payload is not a pin-snooze
+    expect(decodePinSnooze(encodeDone(A, 'today'))).toBeNull(); // nor a "d:"
+    expect(decodePinSnooze('s:short')).toBeNull();
   });
 });
 

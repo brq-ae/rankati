@@ -1,6 +1,15 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Resolve @rankati/shared to its SOURCE for tests (ADR 0086) — the api now imports shared VALUES
+  // (computePin, DEFAULT_PIN_DAYS, snoozeSpanMs), and tests must reflect the current source, not a possibly
+  // stale built `dist`. The production `dist` path is covered separately by the in-image require smoke.
+  resolve: {
+    alias: {
+      '@rankati/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
+    },
+  },
   test: {
     root: './',
     include: ['test/**/*.spec.ts'],

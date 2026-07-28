@@ -20,8 +20,11 @@ import { ListsController } from './lists.controller';
 import { ListsService } from './lists.service';
 import { LocationsController } from './locations.controller';
 import { LocationsService } from './locations.service';
+import { PinSnoozeService } from './pin-snooze.service';
 import { PrismaService } from './prisma.service';
 import { ResetController } from './reset.controller';
+import { SettingsController } from './settings.controller';
+import { SettingsService } from './settings.service';
 import { ResetService } from './reset.service';
 import { RoutinesController } from './routines/routines.controller';
 import { RoutinesService } from './routines/routines.service';
@@ -58,6 +61,7 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     ResetController,
     RoutinesController,
     ChecklistController,
+    SettingsController,
     TelegramController,
   ],
   providers: [
@@ -75,6 +79,8 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     ResetService,
     RoutinesService,
     ChecklistService,
+    SettingsService,
+    PinSnoozeService,
     TelegramConfigService,
     TelegramCaptureService,
     TelegramReadService,

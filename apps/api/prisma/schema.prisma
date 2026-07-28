@@ -195,6 +195,10 @@ model Task {
   /// lands with the server slice.
   needsDetails Boolean @default(false)
 
+  /// The impact pin's snooze (ADRs 0075, 0086) — hide-until instant, or NULL = not snoozed. Moved off the
+  /// client's localStorage so web + bot share one snooze state; rides with the task, cascades on delete.
+  pinSnoozedUntil DateTime?
+
   /// A per-task, plain-text readiness list (ADR 0071) — NEVER a gate. Ticks persist
   /// permanently; nothing auto-resets `done`. Ordered by `position`.
   checklist ChecklistItem[]
@@ -448,6 +452,26 @@ model TelegramConfig {
   /// The local date (YYYY-MM-DD) the digest last fired for — the fire-once-per-day guard (0084, Step 7).
   /// NULL = never sent. Set ONLY on a successful send, so a restart never re-sends and a failed send retries.
   lastDigestSentOn String?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+/// Owner-scoped SHARED settings (ADR 0086) — cross-client preferences that must be one source of truth, so
+/// web, the Telegram bot, and future mobile clients read the same values. A single lazily-upserted row per
+/// owner (find-or-create like TelegramConfig). The impact-pin day-knobs are its FIRST tenant; future shared
+/// settings add COLUMNS here rather than spawning a table each. (Per-device prefs like theme stay client-side.)
+model Settings {
+  id      String @id @default(uuid())
+  ownerId String @unique @default("local")
+
+  /// The four impact-pin day-knobs (ADRs 0075, 0086), moved off the client's `localStorage deck.pin.days`.
+  /// Each is a positive integer; the defaults are the graded-pin fuses/spans.
+  pinHighFuseDays     Int @default(7)
+  pinMediumFuseDays   Int @default(30)
+  pinHighSnoozeDays   Int @default(1)
+  pinMediumSnoozeDays Int @default(3)
 
   updatedAt DateTime @updatedAt
 

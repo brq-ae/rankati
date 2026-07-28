@@ -9,6 +9,7 @@ import type {
   Location,
   MergeLocationsDto,
   NextPairResult,
+  PinDays,
   ResetRequestDto,
   Routine,
   CreateRoutineDto,
@@ -344,3 +345,20 @@ export const unlinkTelegram = (): Promise<TelegramConfigDto> =>
 
 export const setTelegramDigest = (dto: UpdateTelegramDigestDto): Promise<TelegramConfigDto> =>
   request<TelegramConfigDto>('/api/telegram/digest', { method: 'PUT', body: JSON.stringify(dto) });
+
+// ---- Impact pin config + snooze (ADR 0086) — server-backed, one source across clients. ----
+
+/** The four pin day-knobs. */
+export const getPinConfig = (): Promise<PinDays> => request<PinDays>('/api/settings/pin');
+
+/** Save the knobs; returns the server's VALIDATED result (a bad field defaulted, not rejected). */
+export const setPinConfig = (config: PinDays): Promise<PinDays> =>
+  request<PinDays>('/api/settings/pin', { method: 'PUT', body: JSON.stringify(config) });
+
+/** Snooze a task's pin; returns the updated task (with pinSnoozedUntil set). */
+export const snoozePin = (taskId: string): Promise<Task> =>
+  request<Task>(`/api/tasks/${taskId}/pin-snooze`, { method: 'POST' });
+
+/** Clear a task's pin snooze; returns the updated task. */
+export const unsnoozePin = (taskId: string): Promise<Task> =>
+  request<Task>(`/api/tasks/${taskId}/pin-snooze`, { method: 'DELETE' });

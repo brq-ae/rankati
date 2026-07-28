@@ -6,7 +6,7 @@ import type {
   TelegramContext,
   TelegramReplyMarkup,
 } from '../src/telegram/telegram-bot.factory';
-import { encodeDiscard, encodeDone, encodeRefile } from '../src/telegram/telegram-callback';
+import { encodeDiscard, encodeDone, encodePinSnooze, encodeRefile } from '../src/telegram/telegram-callback';
 import type {
   CaptureResult,
   DiscardResult,
@@ -16,10 +16,13 @@ import type {
 import type {
   CompleteResult,
   HandResult,
+  PinInfo,
+  TodayResult,
   TelegramReadService,
 } from '../src/telegram/telegram-read.service';
 import { TelegramBotService } from '../src/telegram/telegram-bot.service';
 import type { TelegramConfigService } from '../src/telegram/telegram-config.service';
+import type { PinSnoozeService } from '../src/pin-snooze.service';
 
 /**
  * Transport LIFECYCLE (3), binding/command WIRING (4), capture/re-file (5), and read commands (6), as PURE
@@ -59,6 +62,10 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   let discardCalls: string[];
   let dealResult: HandResult;
   let dealCalls: number[];
+  let dealTodayResult: TodayResult;
+  let dealTodayCalls: number;
+  let snoozeCalls: string[];
+  let snoozeThrows: boolean;
   let completeResult: CompleteResult;
   let completeCalls: string[];
   let setCommandsThrows: boolean;
@@ -135,16 +142,29 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
       dealCalls.push(limit);
       return dealResult;
     },
+    dealToday: async () => {
+      dealTodayCalls += 1;
+      return dealTodayResult;
+    },
     complete: async (taskId: string) => {
       completeCalls.push(taskId);
       return completeResult;
     },
   } as unknown as TelegramReadService;
 
+  const mockPinSnooze = {
+    snooze: async (taskId: string) => {
+      snoozeCalls.push(taskId);
+      if (snoozeThrows) throw new Error('nope');
+      return { pinSnoozedUntil: new Date() };
+    },
+  } as unknown as PinSnoozeService;
+
   const aTask = (title: string): CaptureResult['task'] =>
     ({ id: TASK_ID, title, listId: 'inbox', needsDetails: true }) as unknown as CaptureResult['task'];
   const card = (id: string, title: string): Task =>
     ({ id, title, listId: 'l', needsDetails: false }) as unknown as Task;
+  const pinInfo = (id: string, title: string, reason: string): PinInfo => ({ task: card(id, title), reason });
 
   beforeEach(() => {
     created = [];
@@ -161,10 +181,14 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     discardCalls = [];
     dealResult = { status: 'ok', cards: [] };
     dealCalls = [];
+    dealTodayResult = { status: 'ok', cards: [], pin: null };
+    dealTodayCalls = 0;
+    snoozeCalls = [];
+    snoozeThrows = false;
     completeResult = { status: 'done', title: 'X' };
     completeCalls = [];
     setCommandsThrows = false;
-    service = new TelegramBotService(mockConfig, mockCapture, mockRead, factory);
+    service = new TelegramBotService(mockConfig, mockCapture, mockRead, mockPinSnooze, factory);
   });
 
   // --- fire a captured handler with a synthetic update; collect every outbound effect ---
@@ -447,7 +471,7 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
 
   it('/today with no timezone tells you to set it', async () => {
     binding = { boundChatId: '42', linkCode: null };
-    dealResult = { status: 'no-timezone' };
+    dealTodayResult = { status: 'no-timezone' };
     const bot = await startedBot();
     const { rec } = await fireCtx(bot.commandHandlers.today, makeCtx(42, { text: '/today' }));
     expect(rec.replies[0].text).toContain('timezone');
@@ -456,22 +480,44 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
 
   it('/today with an empty hand says nothing playable', async () => {
     binding = { boundChatId: '42', linkCode: null };
-    dealResult = { status: 'ok', cards: [] };
+    dealTodayResult = { status: 'ok', cards: [], pin: null };
     const bot = await startedBot();
     const { rec } = await fireCtx(bot.commandHandlers.today, makeCtx(42, { text: '/today' }));
     expect(rec.replies[0].text).toContain('Nothing playable');
     expect(rec.replies[0].markup).toBeUndefined();
   });
 
-  it('/today renders the hand with a ✓ Done button per card (today mode)', async () => {
+  it('/today renders the hand with a ✓ Done button per card (today mode), no pin line when none', async () => {
     binding = { boundChatId: '42', linkCode: null };
-    dealResult = { status: 'ok', cards: [card(TASK_ID, 'A'), card(LIST_ID, 'B')] };
+    dealTodayResult = { status: 'ok', cards: [card(TASK_ID, 'A'), card(LIST_ID, 'B')], pin: null };
     const bot = await startedBot();
     const { rec } = await fireCtx(bot.commandHandlers.today, makeCtx(42, { text: '/today' }));
-    expect(dealCalls).toContain(5);
+    expect(dealTodayCalls).toBeGreaterThan(0);
+    expect(rec.replies[0].text).not.toContain('⚠️');
     const rows = rec.replies[0].markup?.inline_keyboard ?? [];
-    expect(rows).toHaveLength(2); // one button per card
+    expect(rows).toHaveLength(2); // one button per card, no pin row
     expect(rows[0][0].callback_data.startsWith('d:t')).toBe(true);
+  });
+
+  it('/today surfaces the ⚠️ impact pin ABOVE the hand, with ✓ Done AND 😴 Snooze', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    dealTodayResult = {
+      status: 'ok',
+      cards: [card(LIST_ID, 'B')],
+      pin: pinInfo(TASK_ID, 'Renew passport', 'high-impact · 8 days'),
+    };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.commandHandlers.today, makeCtx(42, { text: '/today' }));
+    // The pin line is above the hand header.
+    expect(rec.replies[0].text.indexOf('⚠️ high-impact · 8 days — Renew passport')).toBeLessThan(
+      rec.replies[0].text.indexOf('Today — your top'),
+    );
+    const rows = rec.replies[0].markup?.inline_keyboard ?? [];
+    // First row is the pin's [✓ Done][😴 Snooze]; then the hand card row.
+    expect(rows[0][0].callback_data.startsWith('d:t')).toBe(true); // pin Done
+    expect(rows[0][1].callback_data.startsWith('s:')).toBe(true); // pin Snooze
+    expect(rows[0][1].text).toContain('😴');
+    expect(rows[1][0].callback_data.startsWith('d:t')).toBe(true); // hand card Done
   });
 
   it('/now shows the top card with a ✓ Done button (now mode)', async () => {
@@ -495,7 +541,7 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   it('a ✓ Done tap (today) completes then re-renders the fresh hand in place', async () => {
     binding = { boundChatId: '42', linkCode: null };
     completeResult = { status: 'done', title: 'A' };
-    dealResult = { status: 'ok', cards: [card(LIST_ID, 'B')] };
+    dealTodayResult = { status: 'ok', cards: [card(LIST_ID, 'B')], pin: null };
     const bot = await startedBot();
     const { rec } = await fireCallback(bot, 42, encodeDone(TASK_ID, 'today'));
     expect(completeCalls).toEqual([TASK_ID]);
@@ -537,14 +583,19 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   });
 
   // ---------------------------------------------------------------- digest push (Step 7)
-  it('pushHand sends the /today-rendered hand (with ✓ buttons) to the chat', async () => {
-    dealResult = { status: 'ok', cards: [card(TASK_ID, 'A'), card(LIST_ID, 'B')] };
+  it('pushHand sends the /today-rendered hand + pin (with ✓/😴 buttons) to the chat', async () => {
+    dealTodayResult = {
+      status: 'ok',
+      cards: [card(LIST_ID, 'B')],
+      pin: pinInfo(TASK_ID, 'Renew passport', 'high-impact · 8 days'),
+    };
     const bot = await startedBot();
     expect(await service.pushHand('55')).toBe('sent');
     expect(bot.sendMessageCalls).toHaveLength(1);
     expect(bot.sendMessageCalls[0].chatId).toBe('55');
+    expect(bot.sendMessageCalls[0].text).toContain('⚠️ high-impact · 8 days — Renew passport'); // pin in the digest
     expect(bot.sendMessageCalls[0].text).toContain('Today — your top');
-    expect(bot.sendMessageCalls[0].markup?.inline_keyboard[0][0].callback_data.startsWith('d:t')).toBe(true);
+    expect(bot.sendMessageCalls[0].markup?.inline_keyboard[0][1].callback_data.startsWith('s:')).toBe(true); // pin Snooze
   });
 
   it('pushHand returns no-bot when the poller is not running (no send)', async () => {
@@ -554,16 +605,54 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   });
 
   it('pushHand returns empty (and sends nothing) when the hand is empty', async () => {
-    dealResult = { status: 'ok', cards: [] };
+    dealTodayResult = { status: 'ok', cards: [], pin: null };
     const bot = await startedBot();
     expect(await service.pushHand('55')).toBe('empty');
     expect(bot.sendMessageCalls).toHaveLength(0);
   });
 
   it('pushHand returns no-timezone when the clock cannot be derived', async () => {
-    dealResult = { status: 'no-timezone' };
+    dealTodayResult = { status: 'no-timezone' };
     const bot = await startedBot();
     expect(await service.pushHand('55')).toBe('no-timezone');
     expect(bot.sendMessageCalls).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------- pin snooze callback (Step 6, ADR 0086)
+  it('a 😴 Snooze tap from the bound chat snoozes the task and re-renders (pin recomputes)', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    dealTodayResult = { status: 'ok', cards: [card(LIST_ID, 'B')], pin: null }; // after snooze: no pin
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, encodePinSnooze(TASK_ID));
+    expect(snoozeCalls).toEqual([TASK_ID]);
+    expect(rec.answers[0]).toContain('Snoozed');
+    expect(rec.edits[0]).toContain('Today — your top'); // re-rendered
+    expect(rec.edits[0]).not.toContain('⚠️'); // the snoozed pin is gone on recompute
+  });
+
+  it('a 😴 Snooze tap from a stranger is ignored — no snooze, no edit', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 999, encodePinSnooze(TASK_ID));
+    expect(snoozeCalls).toHaveLength(0);
+    expect(rec.edits).toHaveLength(0);
+  });
+
+  it('a 😴 Snooze of a stale/None task answers cleanly, no edit', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    snoozeThrows = true; // PinSnoozeService throws NotFound / BadRequest
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, encodePinSnooze(TASK_ID));
+    expect(snoozeCalls).toEqual([TASK_ID]);
+    expect(rec.edits).toHaveLength(0);
+    expect(rec.answers[0]).toContain('no longer available');
+  });
+
+  it('a malformed 😴 Snooze payload answers cleanly, no snooze', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, 's:short');
+    expect(snoozeCalls).toHaveLength(0);
+    expect(rec.answers[0]).toContain('no longer valid');
   });
 });

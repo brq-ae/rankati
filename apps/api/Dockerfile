@@ -39,6 +39,11 @@ RUN node apps/api/scripts/fetch-schema-engine.mjs /opt/prisma/schema-engine
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 
+# Build @rankati/shared to CJS dist. shared now carries a pure runtime export (computePin, ADR 0086), so
+# the api requires it AT RUNTIME via the package's exports map (node → dist). The web bundles shared's
+# SOURCE, so only this node dist is built. Emitted here and copied into the runtime stage below.
+RUN pnpm --filter @rankati/shared build
+
 # The Prisma client is gitignored, so it is not in the build context — it must be
 # generated here or the build has no client to compile (ADRs 0033, 0043).
 #
@@ -76,6 +81,10 @@ COPY --from=build /opt/prisma/schema-engine /usr/local/lib/prisma/schema-engine
 ENV PRISMA_SCHEMA_ENGINE_BINARY=/usr/local/lib/prisma/schema-engine
 
 COPY --from=build /repo/apps/api/dist apps/api/dist
+# @rankati/shared's built dist — the api requires it at RUNTIME (computePin, ADR 0086). The --prod install
+# above symlinks node_modules/@rankati/shared → packages/shared; with this dist present, the package's
+# exports map resolves `require('@rankati/shared')` → dist/index.js.
+COPY --from=build /repo/packages/shared/dist packages/shared/dist
 # migrate deploy needs the schema, the committed migrations and the config.
 COPY apps/api/prisma apps/api/prisma
 COPY apps/api/prisma.config.ts apps/api/prisma.config.ts

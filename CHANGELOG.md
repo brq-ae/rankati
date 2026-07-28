@@ -5,6 +5,18 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] — 2026-07-28
+
+**The shared impact pin** — your most-neglected important task now surfaces in Telegram, and the pin's settings follow you across every client instead of living in one browser.
+
+### Added
+
+- **The impact pin in Telegram** — `/today` and the daily digest now lead with the ⚠️ pin (your most-overdue important, playable task), each with a **✓ Done** button to complete it and a **😴 Snooze** button to hide it for its level's span.
+
+### Changed
+
+- **Pin settings and snoozes now sync across clients** — the four pin day-values (the High/Medium fuses and snooze spans) and each task's snooze are stored on the server, so the web app and the Telegram bot share one source of truth and show the same pin. Previously the settings and snoozes lived only in the browser that set them. On upgrade, the pin day-values start at their defaults (High 7 / Medium 30 day fuses, High 1 / Medium 3 day snoozes); re-set them in **Settings** if you had customised them.
+
 ## [0.31.0] — 2026-07-28
 
 **The Telegram bot** — capture and act on your tasks from Telegram, without opening the web app. It runs inside `rankati-api` by polling Telegram: no extra container, and nothing new to expose. Migration-bearing (the api applies it automatically on boot).

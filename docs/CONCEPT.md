@@ -258,10 +258,11 @@ Then it surfaces as one highlighted card with its reason (*"high-impact · skipp
 > **past its fuse**, and **not already in the hand**: one highlighted card **above the hand** (⚠️,
 > most-overdue first, one at a time) with its reason (e.g. "high-impact · 8 days"). **Snooze** hides it
 > for a level-set span — **High 1 day, Medium 3** — then it returns if still neglected. All four
-> day-values are **editable in Settings**. The dealt hand is what made this buildable — a stable
-> playable set to count neglect against. Client-side: the pin is computed from `impact` + `createdAt`
-> (server) and the held set, and snooze lives in `localStorage`; the only server change is the `impact`
-> column. The original "skipped 3×" neglect-count is a possible future refinement — the fuse is simpler.
+> day-values are **editable in Settings**, and those four settings plus each task's snooze are **stored
+> on the server** — so the web app, the Telegram bot, and any future client draw on one source of truth
+> and compute the identical pin from one shared function. The dealt hand is what made this buildable — a
+> stable playable set to count neglect against. The original "skipped 3×" neglect-count is a possible
+> future refinement — the fuse is simpler.
 
 > **Checklists are readiness, not ranking.** Ticking an item is a personal
 > judgement call, never enforced (§9). The proposed ranking signal — "a fully-ticked checklist

@@ -55,7 +55,7 @@ Rankati can connect to a Telegram bot **you** own — it runs inside the `rankat
 3. Send the shown **link code** to your bot to bind your chat (one-time; only that chat is served).
 4. Optionally turn on the **daily digest** — a send time plus your timezone.
 
-Capture by texting the bot; read with `/today` and `/now`; complete with the ✓ buttons. The token is stored on your server (masked in the UI, never logged).
+Capture by texting the bot; read with `/today` and `/now`; complete with the ✓ buttons. `/today` and the digest lead with your ⚠️ **impact pin** (the most-neglected important task) carrying **✓ Done** and **😴 Snooze**. The token is stored on your server (masked in the UI, never logged).
 
 ## Recovery — run on the box, no email
 

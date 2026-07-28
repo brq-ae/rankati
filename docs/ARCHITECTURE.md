@@ -83,8 +83,12 @@ The endpoints that exist **today**. This table grows one milestone at a time; it
 | `POST` | `/api/telegram/link-code` | — | `TelegramConfigDto` (issues a fresh one-time binding code) |
 | `POST` | `/api/telegram/unlink` | — | `TelegramConfigDto` (unbinds the chat, re-issues a code) |
 | `PUT` | `/api/telegram/digest` | `UpdateTelegramDigestDto` | `TelegramConfigDto` (enabling requires a timezone) |
+| `GET` | `/api/settings/pin` | — | `PinDaysDto` (the four impact-pin day-values — High/Medium fuse, High/Medium snooze) |
+| `PUT` | `/api/settings/pin` | `PinDaysDto` | `PinDaysDto` (each value validated to a positive integer; a bad field falls back to its default) |
+| `POST` | `/api/tasks/:id/pin-snooze` | — | `Task` (hides the task's impact pin for its level's snooze span; `400` if the task has no impact) |
+| `DELETE` | `/api/tasks/:id/pin-snooze` | — | `Task` (clears the snooze) |
 
-The Telegram bot is bundled in `rankati-api` and reaches Telegram by long-polling — it adds no container and no inbound port; the routes above are the web app's Settings surface.
+The Telegram bot is bundled in `rankati-api` and reaches Telegram by long-polling — it adds no container and no inbound port; the routes above are the web app's Settings surface. The **impact pin** is computed by one shared function (`computePin` in `@rankati/shared`) against server-held settings (a `Settings` singleton) and each task's `pinSnoozedUntil`, so the web app and the bot fire the identical pin.
 
 Three rules hold across all of it:
 

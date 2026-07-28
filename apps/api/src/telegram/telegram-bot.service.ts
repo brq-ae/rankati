@@ -11,17 +11,21 @@ import type { Task, TelegramBotStatus } from '@rankati/shared';
 import {
   decodeDiscard,
   decodeDone,
+  decodePinSnooze,
   decodeRefile,
   DISCARD_TRIGGER,
   DONE_TRIGGER,
   encodeDiscard,
   encodeDone,
+  encodePinSnooze,
   encodeRefile,
+  PIN_SNOOZE_TRIGGER,
   REFILE_TRIGGER,
 } from './telegram-callback';
 import { TelegramCaptureService, type CaptureResult } from './telegram-capture.service';
 import { TelegramConfigService } from './telegram-config.service';
-import { TelegramReadService } from './telegram-read.service';
+import { TelegramReadService, type PinInfo } from './telegram-read.service';
+import { PinSnoozeService } from '../pin-snooze.service';
 
 /** Read-command replies (Step 6). */
 const NEEDS_TZ =
@@ -66,6 +70,7 @@ export class TelegramBotService implements OnModuleDestroy {
     private readonly config: TelegramConfigService,
     private readonly capture: TelegramCaptureService,
     private readonly read: TelegramReadService,
+    private readonly pinSnooze: PinSnoozeService,
     @Inject(TELEGRAM_BOT_FACTORY) private readonly createBot: TelegramBotFactory,
   ) {}
 
@@ -181,8 +186,8 @@ export class TelegramBotService implements OnModuleDestroy {
         await ctx.reply(NOT_LINKED);
         return;
       }
-      const dealt = await this.dealHand(5);
-      if (dealt.kind === 'hand') {
+      const dealt = await this.todayMessage();
+      if (dealt.kind === 'today') {
         await ctx.reply(dealt.text, { reply_markup: dealt.keyboard });
       } else {
         await ctx.reply(dealt.text);
@@ -245,11 +250,41 @@ export class TelegramBotService implements OnModuleDestroy {
       if (decoded.mode === 'now') {
         await ctx.editMessageText(`✓ Done: ${outcome.title}`, { reply_markup: { inline_keyboard: [] } });
       } else {
-        const dealt = await this.dealHand(5);
+        const dealt = await this.todayMessage();
         await ctx.editMessageText(dealt.text, {
-          reply_markup: dealt.kind === 'hand' ? dealt.keyboard : { inline_keyboard: [] },
+          reply_markup: dealt.kind === 'today' ? dealt.keyboard : { inline_keyboard: [] },
         });
       }
+    });
+
+    // A 😴 Snooze tap on the impact pin (ADR 0086). Gated on the bound chat; PinSnoozeService is owner-scoped
+    // and derives the level + span server-side. After snoozing, re-render so the pin recomputes (the snoozed
+    // task drops; the next-most-overdue may surface, or none).
+    bot.callbackQuery(PIN_SNOOZE_TRIGGER, async (ctx) => {
+      const chatId = String(ctx.chat?.id ?? '');
+      const { boundChatId } = await this.config.getBinding();
+      if (!boundChatId || chatId !== boundChatId) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const taskId = decodePinSnooze(ctx.callbackQuery?.data ?? '');
+      if (!taskId) {
+        await ctx.answerCallbackQuery('That button is no longer valid.');
+        return;
+      }
+      try {
+        await this.pinSnooze.snooze(taskId);
+      } catch (err) {
+        // NotFound (stale/foreign) or a None-impact task, or a transient error — answer cleanly, don't crash.
+        this.logError('pin snooze failed', err);
+        await ctx.answerCallbackQuery('That pin is no longer available.');
+        return;
+      }
+      await ctx.answerCallbackQuery('😴 Snoozed');
+      const dealt = await this.todayMessage();
+      await ctx.editMessageText(dealt.text, {
+        reply_markup: dealt.kind === 'today' ? dealt.keyboard : { inline_keyboard: [] },
+      });
     });
 
     // A re-file button tap. Gated on the bound chat; the payload is verified against live rows before moving.
@@ -383,31 +418,44 @@ export class TelegramBotService implements OnModuleDestroy {
     return { inline_keyboard: rows };
   }
 
-  /** Deal the top-`limit` hand, ready to send: a rendered hand, or a plain message (no timezone / empty / error). */
-  private async dealHand(
-    limit: number,
-  ): Promise<{ kind: 'message'; text: string } | { kind: 'hand'; text: string; keyboard: TelegramReplyMarkup }> {
+  /** Today's hand + pin, ready to send: a rendered message (pin line above the hand), or a plain message
+   *  (no timezone / empty / error). Used by /today, the ✓ Done / 😴 Snooze re-render, and the digest. */
+  private async todayMessage(): Promise<
+    { kind: 'message'; text: string } | { kind: 'today'; text: string; keyboard: TelegramReplyMarkup }
+  > {
     let result;
     try {
-      result = await this.read.deal(limit);
+      result = await this.read.dealToday();
     } catch (err) {
       this.logError('/today failed', err);
       return { kind: 'message', text: READ_FAILED };
     }
     if (result.status === 'no-timezone') return { kind: 'message', text: NEEDS_TZ };
     if (!result.cards.length) return { kind: 'message', text: NOTHING_PLAYABLE };
-    const { text, keyboard } = this.renderHand(result.cards);
-    return { kind: 'hand', text, keyboard };
+    const { text, keyboard } = this.renderToday(result.cards, result.pin);
+    return { kind: 'today', text, keyboard };
   }
 
-  /** The numbered hand + one ✓ Done button per card. */
-  private renderHand(cards: Task[]): { text: string; keyboard: TelegramReplyMarkup } {
-    const lines = [`Today — your top ${cards.length}:`];
+  /**
+   * The ⚠️ impact-pin line (ADR 0086) ABOVE the numbered hand — the pin gets a ✓ Done AND a 😴 Snooze;
+   * each hand card gets a ✓ Done. No pin → no line (as before).
+   */
+  private renderToday(cards: Task[], pin: PinInfo | null): { text: string; keyboard: TelegramReplyMarkup } {
+    const lines: string[] = [];
+    const rows: TelegramInlineButton[][] = [];
+    if (pin) {
+      lines.push(`⚠️ ${pin.reason} — ${pin.task.title}`, '');
+      rows.push([
+        { text: `✓ Done · ${truncateLabel(pin.task.title, 14)}`, callback_data: encodeDone(pin.task.id, 'today') },
+        { text: '😴 Snooze', callback_data: encodePinSnooze(pin.task.id) },
+      ]);
+    }
+    lines.push(`Today — your top ${cards.length}:`);
     cards.forEach((c, i) => lines.push(`${i + 1}. ${c.title}`));
     lines.push('', 'Tap ✓ to mark one done.');
-    const rows: TelegramInlineButton[][] = cards.map((c, i) => [
-      { text: `✓ ${i + 1}. ${truncateLabel(c.title)}`, callback_data: encodeDone(c.id, 'today') },
-    ]);
+    cards.forEach((c, i) =>
+      rows.push([{ text: `✓ ${i + 1}. ${truncateLabel(c.title)}`, callback_data: encodeDone(c.id, 'today') }]),
+    );
     return { text: lines.join('\n'), keyboard: { inline_keyboard: rows } };
   }
 
@@ -429,14 +477,14 @@ export class TelegramBotService implements OnModuleDestroy {
     if (!bot) return 'no-bot';
     let dealt;
     try {
-      dealt = await this.read.deal(5);
+      dealt = await this.read.dealToday();
     } catch (err) {
       this.logError('digest deal failed', err);
       return 'error';
     }
     if (dealt.status === 'no-timezone') return 'no-timezone';
     if (!dealt.cards.length) return 'empty';
-    const { text, keyboard } = this.renderHand(dealt.cards);
+    const { text, keyboard } = this.renderToday(dealt.cards, dealt.pin);
     try {
       await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
     } catch (err) {

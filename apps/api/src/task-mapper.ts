@@ -85,6 +85,9 @@ export function toTaskDto(task: TaskWithRelations): TaskDto {
     // The "needs details" flag (ADR 0073) — a plain boolean soft marker, never a gate. Carried on
     // every read from this slice on; the set-on-create/clear-on-edit lifecycle is the next slice.
     needsDetails: task.needsDetails,
+    // The impact pin's snooze instant (ADRs 0075, 0086) — Date -> ISO like createdAt, or null. Carried on
+    // every read so the client derives the snooze map straight from the task list.
+    pinSnoozedUntil: task.pinSnoozedUntil ? task.pinSnoozedUntil.toISOString() : null,
     // Readiness checklist (ADR 0071), already ordered by position via TASK_INCLUDE. Same
     // Date -> ISO conversion as createdAt above; inert storage, never gates.
     checklist: task.checklist.map((item) => ({

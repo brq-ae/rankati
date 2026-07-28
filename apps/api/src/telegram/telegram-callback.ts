@@ -106,6 +106,30 @@ export function decodeDiscard(data: string): string | null {
   }
 }
 
+// ── Pin snooze button (Step 6) ───────────────────────────────────────────────────────────────────────
+
+const PIN_SNOOZE_PREFIX = 's:';
+
+/** The regex the transport routes 😴 Snooze callbacks on (distinct from "m:"/"d:"/"x:"). */
+export const PIN_SNOOZE_TRIGGER = /^s:/;
+
+/** Pack a 😴 Snooze button's payload: "s:" + base64url(taskId) = 24 bytes. */
+export function encodePinSnooze(taskId: string): string {
+  return `${PIN_SNOOZE_PREFIX}${uuidToToken(taskId)}`;
+}
+
+/** Unpack a 😴 Snooze payload → the task id, or null if malformed. */
+export function decodePinSnooze(data: string): string | null {
+  if (!data.startsWith(PIN_SNOOZE_PREFIX)) return null;
+  const body = data.slice(PIN_SNOOZE_PREFIX.length);
+  if (body.length !== TOKEN_LEN) return null;
+  try {
+    return tokenToUuid(body);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The lists offered as re-file buttons (ADR 0084): the input is already alphabetical (ListsService.findAll
  * orders by name, matching the web app). Drop the Inbox itself and cap the count; return what to show plus

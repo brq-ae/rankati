@@ -199,6 +199,12 @@ export interface Task {
    */
   needsDetails: boolean;
   /**
+   * The impact pin's snooze (ADRs 0075, 0086) — an ISO instant to hide the fired pin until, or null = not
+   * snoozed. Moved off the client's localStorage so web + bot share one snooze state; carried on every read
+   * so the client derives the snooze map straight from the task list in one pass.
+   */
+  pinSnoozedUntil: string | null;
+  /**
    * The task's readiness checklist (ADR 0071) — soft, NEVER a gate, ordered by `position`.
    * Empty = no items. Ticks persist permanently; nothing here changes what Today/Lists/the
    * Arena show.
@@ -662,3 +668,6 @@ export interface UpdateTelegramDigestDto {
   /** An IANA timezone name, e.g. "Asia/Dubai"; null clears it. */
   timezone: string | null;
 }
+
+// The graded impact pin — pure logic shared across web + api/bot (ADRs 0075, 0086).
+export * from './pin';
