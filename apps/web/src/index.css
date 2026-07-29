@@ -414,6 +414,26 @@ body,
 }
 
 /*
+ * Native <select> theming (ADR 0087, Part C). Chrome draws the option popup itself, and an <option>
+ * never carries a utility class — so without an explicit surface + text the options fall back to the UA
+ * default (white), the dark-theme clash the owner hit in the New-Routine "Type" dropdown. Bind the
+ * control AND its options to --control-bg (the select-only OPAQUE token, opaque in dark by contract —
+ * see the @theme note / docs/THEMES.md) and the theme's text colour, so every native <select> themes
+ * across all 8 theme+mode combos. In @layer base so a per-select bg utility (e.g. App's `bg-card`) still
+ * wins for the CONTROL; the options — which have no utilities — are themed only here.
+ */
+@layer base {
+  select {
+    background-color: var(--control-bg);
+    color: var(--fg);
+  }
+  select option {
+    background-color: var(--control-bg);
+    color: var(--fg);
+  }
+}
+
+/*
  * The branded GLOW (ADR 0063) — a soft halo for a primary CTA, written as a bespoke class rather
  * than a Tailwind shadow utility on purpose: Tailwind's shadow machinery extracts the colour and
  * DROPS the color-mix (it renders the solid primary, not the 35% halo), so the box-shadow is set

@@ -477,3 +477,35 @@ model Settings {
 
   @@index([ownerId])
 }
+
+/// A Log (ADR 0087) — a pull-based cadence tracker (Haircut, Nails, Pedicure), the OPPOSITE of a
+/// Routine on all three axes: its occurrences ARE its history (a Routine keeps none), it never climbs
+/// or nags, and its cadence hint shows only on open. Wholly outside the engine — never ranked, gated,
+/// or in Today / Upcoming / Lists / the Arena. A sibling entity, deliberately NOT a 4th RoutineType.
+model Log {
+  id      String @id @default(uuid())
+  name    String
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  createdAt DateTime   @default(now())
+  entries   LogEntry[]
+
+  @@index([ownerId])
+}
+
+/// One dated occurrence of a Log (ADR 0087). `doneOn` is a CALENDAR DAY (`@db.Date`, the 0052
+/// discipline — a haircut is a day, not an instant); the client sends its local day. Idempotent per
+/// day via the unique (logId, doneOn) — "✓ I did it today" tapped twice is one occurrence. Cascades
+/// when its Log is deleted.
+model LogEntry {
+  id    String @id @default(uuid())
+  logId String
+  log   Log    @relation(fields: [logId], references: [id], onDelete: Cascade)
+
+  doneOn    DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  @@unique([logId, doneOn])
+  @@index([logId])
+}

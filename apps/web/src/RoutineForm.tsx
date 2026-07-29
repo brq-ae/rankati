@@ -18,6 +18,9 @@ import { useEffect, useRef, useState } from 'react';
  */
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const field = 'rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary';
+// Native <select>s use the OPAQUE select token, not the (translucent) field-bg — the THEMES.md contract
+// so the option popup themes instead of rendering white (ADR 0087, Part C). Inputs keep `field`.
+const control = 'rounded-xl border border-field bg-control-bg px-2 py-1 text-sm outline-none focus:border-primary';
 
 export default function RoutineForm({
   routine,
@@ -120,7 +123,7 @@ export default function RoutineForm({
         {!editing && (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted">Type</span>
-            <select value={type} onChange={(e) => setType(e.target.value as RoutineType)} aria-label="Routine type" className={field}>
+            <select value={type} onChange={(e) => setType(e.target.value as RoutineType)} aria-label="Routine type" className={control}>
               <option value="frequency">Frequency — N times per period</option>
               <option value="interval_floating">Every N — floating from completion</option>
               <option value="interval_fixed">Fixed — a calendar date</option>
@@ -135,7 +138,7 @@ export default function RoutineForm({
               <input type="number" min={1} value={targetCount} onChange={(e) => setTargetCount(num(e.target.value, 1))} aria-label="Target count" className={`${field} w-20`} />
             </label>
             <span className="pb-1 text-sm text-muted">per</span>
-            <select value={periodUnit} onChange={(e) => setPeriodUnit(e.target.value as PeriodUnit)} aria-label="Period unit" className={field}>
+            <select value={periodUnit} onChange={(e) => setPeriodUnit(e.target.value as PeriodUnit)} aria-label="Period unit" className={control}>
               {(['day', 'week', 'month', 'year'] as const).map((u) => <option key={u} value={u}>{u}</option>)}
             </select>
           </div>
@@ -146,7 +149,7 @@ export default function RoutineForm({
             <div className="flex items-end gap-2">
               <span className="pb-1 text-sm text-muted">every</span>
               <input type="number" min={1} value={intervalCount} onChange={(e) => setIntervalCount(num(e.target.value, 1))} aria-label="Interval count" className={`${field} w-20`} />
-              <select value={intervalUnit} onChange={(e) => setIntervalUnit(e.target.value as IntervalUnit)} aria-label="Interval unit" className={field}>
+              <select value={intervalUnit} onChange={(e) => setIntervalUnit(e.target.value as IntervalUnit)} aria-label="Interval unit" className={control}>
                 {(['day', 'week', 'month'] as const).map((u) => <option key={u} value={u}>{u}(s)</option>)}
               </select>
             </div>
@@ -156,7 +159,7 @@ export default function RoutineForm({
                 value={preferredWeekday ?? ''}
                 onChange={(e) => setPreferredWeekday(e.target.value === '' ? null : Number(e.target.value))}
                 aria-label="Preferred weekday"
-                className={field}
+                className={control}
               >
                 <option value="">None</option>
                 {WEEKDAYS.map((w, i) => <option key={w} value={i}>{w}</option>)}
@@ -171,17 +174,17 @@ export default function RoutineForm({
 
         {type === 'interval_fixed' && (
           <div className="flex flex-col gap-2">
-            <select value={ruleKind} onChange={(e) => setRuleKind(e.target.value as FixedRuleKind)} aria-label="Rule kind" className={field}>
+            <select value={ruleKind} onChange={(e) => setRuleKind(e.target.value as FixedRuleKind)} aria-label="Rule kind" className={control}>
               <option value="nth_weekday_of_month">Nth weekday of the month</option>
               <option value="day_of_month">A day of the month</option>
               <option value="last_weekday_of_month">Last weekday of the month</option>
             </select>
             {ruleKind === 'nth_weekday_of_month' && (
               <div className="flex items-center gap-2">
-                <select value={ordinal} onChange={(e) => setOrdinal(Number(e.target.value))} aria-label="Ordinal" className={field}>
+                <select value={ordinal} onChange={(e) => setOrdinal(Number(e.target.value))} aria-label="Ordinal" className={control}>
                   {[1, 2, 3, 4, 5].map((o) => <option key={o} value={o}>{['1st', '2nd', '3rd', '4th', '5th'][o - 1]}</option>)}
                 </select>
-                <select value={ruleWeekday} onChange={(e) => setRuleWeekday(Number(e.target.value))} aria-label="Weekday" className={field}>
+                <select value={ruleWeekday} onChange={(e) => setRuleWeekday(Number(e.target.value))} aria-label="Weekday" className={control}>
                   {WEEKDAYS.map((w, i) => <option key={w} value={i}>{w}</option>)}
                 </select>
               </div>
@@ -193,7 +196,7 @@ export default function RoutineForm({
               </label>
             )}
             {ruleKind === 'last_weekday_of_month' && (
-              <select value={ruleWeekday} onChange={(e) => setRuleWeekday(Number(e.target.value))} aria-label="Weekday" className={field}>
+              <select value={ruleWeekday} onChange={(e) => setRuleWeekday(Number(e.target.value))} aria-label="Weekday" className={control}>
                 {WEEKDAYS.map((w, i) => <option key={w} value={i}>{w}</option>)}
               </select>
             )}

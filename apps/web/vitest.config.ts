@@ -1,6 +1,16 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Resolve @rankati/shared to its SOURCE for tests (ADR 0086) — the web imports shared VALUES
+  // (computePin, computeLogStats). Without this, vitest's node resolution picks the built `dist`
+  // (the package's `default` condition), so a new shared export is missing until a rebuild. The
+  // alias keeps unit tests on source, matching the no-build dev loop and the api's vitest config.
+  resolve: {
+    alias: {
+      '@rankati/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
+    },
+  },
   test: {
     root: './',
     // Two kinds of test live here, and they need different worlds:

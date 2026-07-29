@@ -25,7 +25,7 @@ import { blockedTasks } from './blocked';
 import ThemeToggle from './ThemeToggle';
 import TodayView from './TodayView';
 import UpcomingView from './UpcomingView';
-import RoutinesView from './RoutinesView';
+import RoutinesTab from './RoutinesTab';
 import { useMode } from './mode';
 import { usePalette } from './palette';
 import { localDay, localTime, waitingBreakdown } from './local-day';
@@ -1245,7 +1245,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.32.0 — the shared pin</p>
+            <p className="text-sm text-muted">v0.33.0 — logs & fixes</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1348,7 +1348,7 @@ export default function App() {
             hiddenByFilter={upcoming.length - visibleUpcoming.length}
           />
         ) : view === 'routines' ? (
-          <RoutinesView on={localDay()} />
+          <RoutinesTab on={localDay()} />
         ) : (
           <>
             {/* Committing a sitting reshuffles the ranking, so reload it in its new order. */}

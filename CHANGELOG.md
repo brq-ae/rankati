@@ -5,6 +5,19 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] — 2026-07-29
+
+**Logs, plus two fixes** — a new way to track things you do irregularly, a dropdown fix for dark themes, and a fixed install icon. **Migration-bearing** (the api applies it automatically on boot).
+
+### Added
+
+- **Logs** — the Routines tab now has two sub-tabs: **Reminders** (the recurring routines) and **Logs**, a new pull-based cadence tracker. A Log (Haircut, Nails, Pedicure) records dated occurrences with **✓ I did it today** (one per calendar day); open it for the last-done, a soft cadence hint ("usually ~35 days · it's been 40"), and the history with an undo. It never climbs, nags, or notifies — the hint shows only when you open it — and it stays wholly outside the ranking engine.
+
+### Fixed
+
+- **Dark-theme dropdowns** — native dropdown option lists rendered on a white background, clashing with dark themes (seen in the New-Routine "Type" dropdown). Every dropdown now themes its option list across all themes and modes.
+- **The white installed-app icon** — the install icons had transparent corners (and the maskable one had no safe zone), so an installed tile could render white. Regenerated as fully opaque icons with a proper maskable safe zone.
+
 ## [0.32.0] — 2026-07-28
 
 **The shared impact pin** — your most-neglected important task now surfaces in Telegram, and the pin's settings follow you across every client instead of living in one browser.

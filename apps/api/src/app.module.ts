@@ -20,6 +20,8 @@ import { ListsController } from './lists.controller';
 import { ListsService } from './lists.service';
 import { LocationsController } from './locations.controller';
 import { LocationsService } from './locations.service';
+import { LogsController } from './logs.controller';
+import { LogsService } from './logs.service';
 import { PinSnoozeService } from './pin-snooze.service';
 import { PrismaService } from './prisma.service';
 import { ResetController } from './reset.controller';
@@ -60,6 +62,7 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     DuelSessionsController,
     ResetController,
     RoutinesController,
+    LogsController,
     ChecklistController,
     SettingsController,
     TelegramController,
@@ -78,6 +81,7 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     ArenaSessionService,
     ResetService,
     RoutinesService,
+    LogsService,
     ChecklistService,
     SettingsService,
     PinSnoozeService,

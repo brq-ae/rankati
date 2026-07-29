@@ -8,6 +8,8 @@
  * LOCAL_OWNER_ID lives in apps/api for exactly this reason.
  */
 
+import type { LogStats } from './logs';
+
 /** v0.1 lifecycle. `archived` arrives with the retention milestone (CONCEPT §11). */
 export type TaskStatus = 'active' | 'done';
 
@@ -671,3 +673,43 @@ export interface UpdateTelegramDigestDto {
 
 // The graded impact pin — pure logic shared across web + api/bot (ADRs 0075, 0086).
 export * from './pin';
+
+// Log cadence stats — pure logic shared across web + api (ADR 0087).
+export * from './logs';
+
+/**
+ * A Log (ADR 0087) — a pull-based cadence tracker, the opposite of a Routine (its occurrences ARE its
+ * history; it never climbs or nags). Wholly outside the engine. `stats` is derived server-side against
+ * the client's local day (`computeLogStats`). `entries` is present on the detail read, omitted on the
+ * list read to keep it light.
+ */
+export interface Log {
+  id: string;
+  ownerId: string;
+  name: string;
+  createdAt: string;
+  stats: LogStats;
+  entries?: LogEntry[];
+}
+
+/** One dated occurrence of a Log (ADR 0087). `doneOn` is a calendar day (`YYYY-MM-DD`, the 0052 discipline). */
+export interface LogEntry {
+  id: string;
+  doneOn: string;
+  createdAt: string;
+}
+
+/** POST /logs — create a Log. */
+export interface CreateLogDto {
+  name: string;
+}
+
+/** PATCH /logs/:id — rename a Log. */
+export interface UpdateLogDto {
+  name: string;
+}
+
+/** POST /logs/:id/did — stamp today's occurrence; carries the client's local day (0052), idempotent per day. */
+export interface LogDidDto {
+  on: string;
+}

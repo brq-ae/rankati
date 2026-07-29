@@ -345,9 +345,9 @@ This field is also the **seed of future collaboration**: today it's a label + a 
 
 ## 8. Routines — rhythms you keep
 
-Things you repeat aren't things you rank against each other; they're **rhythms you keep**. A **Routine** is a first-class entity that lives **wholly outside the engine** — it never duels, never has an importance, never gates, and never appears in Today / Upcoming / Lists / the Arena. It lives in its own **Routines tab**. *(This supersedes an old template/instance model; recurrence never entered the Arena.)*
+Things you repeat aren't things you rank against each other; they're **rhythms you keep**. A **Routine** is a first-class entity that lives **wholly outside the engine** — it never duels, never has an importance, never gates, and never appears in Today / Upcoming / Lists / the Arena. It lives in its own **Routines tab**, which has two sub-tabs: **Reminders** (the recurring routines below) and **Logs** (§8.1 — pull-based cadence trackers). *(This supersedes an old template/instance model; recurrence never entered the Arena.)*
 
-Three types:
+**Reminders** come in three types:
 
 - **Frequency** — "N times per day / week / month / year." Shows your progress in the current period ("2/3 this week") and **resets at the period boundary** (day → each day, week → Monday, month → the 1st, year → Jan 1). **No history** — the prior period is simply discarded. Action: **Did it** (+1).
 - **Interval — floating** — "every N days / weeks / months," measured from when you *last did it*. **Did it** restarts the clock (optionally snapping forward to a preferred weekday, never earlier); if the date passes untouched it stays and **climbs**.
@@ -355,7 +355,13 @@ Three types:
 
 **Snooze** hides any routine from the tab for a while (5 minutes … 1 day) so others take the top; it touches no schedule and records nothing done or missed. The tab **climbs** — overdue and nearer-due reminders rise; frequency routines (which have no due date) sit in a band below, ordered within that band by **pace pressure** — how far behind you are given the time left in the current period (the daily rate you'd now need), so the most-at-risk rhythm rises and a goal-met one sinks.
 
-Deliberately minimal: **no history, no streaks, no adherence-over-time** (may come later), and **no notifications** — a routine is a tab you open and check. *Built.*
+Reminders stay deliberately minimal: **no history, no streaks, no adherence-over-time**, and **no notifications** — a reminder is a tab you open and check. (The "may come later" history is now **Logs** below — a separate kind, not a change to reminders.) *Built.*
+
+### 8.1 Logs — cadence you track, not a rhythm you're held to
+
+Some repeated things aren't rhythms you must keep on pace — you just want to **track how often** they happen: a haircut, nails, a pedicure. A **Log** is the opposite of a reminder on every axis: its dated occurrences **are** its history, it **never climbs, nags, or shows pace pressure**, and its cadence hint appears **only when you open it** — pure pull, never a notification.
+
+Tap **✓ I did it today** to stamp today's occurrence (idempotent — one per calendar day). Open a Log and it shows the **last-done**, a **soft cadence hint** (*"usually ~35 days · it's been 40"*), and the **history** — dated occurrences, newest-first, each with an **undo** to remove a mis-tap. Under two occurrences it stays graceful — *"logged once on \<date\>"* / *"not logged yet"*, never a bogus average. A Log is renamable and deletable like a list and, like everything in this tab, lives **wholly outside the engine** — never ranked, gated, or in Today / Upcoming / Lists / the Arena. Grouping many Logs (Grooming, Home) is deferred; they start flat. *Built.*
 
 ---
 

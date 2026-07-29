@@ -7,6 +7,9 @@ import type {
   CreateTaskDto,
   List,
   Location,
+  Log,
+  CreateLogDto,
+  UpdateLogDto,
   MergeLocationsDto,
   NextPairResult,
   PinDays,
@@ -264,6 +267,34 @@ export const routineDismiss = (id: string, on: string): Promise<Routine> =>
 
 export const routineSnooze = (id: string, until: string): Promise<Routine> =>
   request<Routine>(`/api/routines/${id}/snooze`, { method: 'POST', body: JSON.stringify({ until }) });
+
+// ── Logs (ADR 0087) — pull-based cadence trackers; a sibling silo, also wholly outside the engine.
+// Reads (and the mutations that return a Log) carry the client's local day so the server-derived cadence
+// stats come back fresh. The list is light (stats only); the detail read carries the dated occurrences. ─
+export const getLogs = (on: string): Promise<Log[]> =>
+  request<Log[]>(`/api/logs?on=${encodeURIComponent(on)}`);
+
+export const getLog = (id: string, on: string): Promise<Log> =>
+  request<Log>(`/api/logs/${id}?on=${encodeURIComponent(on)}`);
+
+export const createLog = (dto: CreateLogDto): Promise<Log> =>
+  request<Log>('/api/logs', { method: 'POST', body: JSON.stringify(dto) });
+
+export const renameLog = (id: string, dto: UpdateLogDto, on: string): Promise<Log> =>
+  request<Log>(`/api/logs/${id}?on=${encodeURIComponent(on)}`, { method: 'PATCH', body: JSON.stringify(dto) });
+
+export const deleteLog = async (id: string): Promise<void> => {
+  const res = await fetch(`/api/logs/${id}`, { method: 'DELETE' });
+  ensureOk(res);
+};
+
+export const logDid = (id: string, on: string): Promise<Log> =>
+  request<Log>(`/api/logs/${id}/did`, { method: 'POST', body: JSON.stringify({ on }) });
+
+export const logUndo = (id: string, entryId: string, on: string): Promise<Log> =>
+  request<Log>(`/api/logs/${id}/entries/${encodeURIComponent(entryId)}?on=${encodeURIComponent(on)}`, {
+    method: 'DELETE',
+  });
 
 // ── Auth (ADR 0076) — the front door. status routes the app; setup/login open a session (the server
 // sets the cookie); logout revokes it. login is raw (not `request`) so the caller sees the 401/429

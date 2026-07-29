@@ -5,4 +5,4 @@
  * because `scripts/dev.sh` greps that file for it to prove the served bundle is current, so it cannot be
  * replaced by this import without breaking the FRESH check. One value, two spots, noted in both.
  */
-export const APP_VERSION = '0.32.0';
+export const APP_VERSION = '0.33.0';

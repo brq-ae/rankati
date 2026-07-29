@@ -76,6 +76,13 @@ The endpoints that exist **today**. This table grows one milestone at a time; it
 | `POST` | `/api/routines/:id/did` | `{ on }` | `Routine` (frequency +1 / floating resets clock) |
 | `POST` | `/api/routines/:id/dismiss` | `{ on }` | `Routine` (fixed only) |
 | `POST` | `/api/routines/:id/snooze` | `{ until }` | `Routine` (display-only hide-until) |
+| `GET` | `/api/logs` | `?on=YYYY-MM-DD` (required) | `Log[]` — pull-based cadence trackers with server-derived stats |
+| `POST` | `/api/logs` | `CreateLogDto` | `Log` |
+| `GET` | `/api/logs/:id` | `?on=YYYY-MM-DD` (required) | `Log` (with its dated occurrences) |
+| `PATCH` | `/api/logs/:id` | `UpdateLogDto` (+ `?on=`) | `Log` (rename) |
+| `DELETE` | `/api/logs/:id` | — | `204`, cascade-drops its occurrences |
+| `POST` | `/api/logs/:id/did` | `{ on }` | `Log` (stamps today's occurrence; idempotent per calendar day) |
+| `DELETE` | `/api/logs/:id/entries/:entryId` | `?on=` | `Log` (undo — remove one occurrence) |
 | `GET` | `/api/telegram/config` | — | `TelegramConfigDto` (masked; the raw token is never returned) |
 | `GET` | `/api/telegram/status` | — | `TelegramStatusDto` (`running`/`error`/`stopped` poller health) |
 | `PUT` | `/api/telegram/token` | `SetTelegramTokenDto` | `TelegramConfigDto` (starts/restarts the poller) |
@@ -88,7 +95,7 @@ The endpoints that exist **today**. This table grows one milestone at a time; it
 | `POST` | `/api/tasks/:id/pin-snooze` | — | `Task` (hides the task's impact pin for its level's snooze span; `400` if the task has no impact) |
 | `DELETE` | `/api/tasks/:id/pin-snooze` | — | `Task` (clears the snooze) |
 
-The Telegram bot is bundled in `rankati-api` and reaches Telegram by long-polling — it adds no container and no inbound port; the routes above are the web app's Settings surface. The **impact pin** is computed by one shared function (`computePin` in `@rankati/shared`) against server-held settings (a `Settings` singleton) and each task's `pinSnoozedUntil`, so the web app and the bot fire the identical pin.
+The Telegram bot is bundled in `rankati-api` and reaches Telegram by long-polling — it adds no container and no inbound port; the routes above are the web app's Settings surface. The **impact pin** is computed by one shared function (`computePin` in `@rankati/shared`) against server-held settings (a `Settings` singleton) and each task's `pinSnoozedUntil`, so the web app and the bot fire the identical pin. A **Log**'s cadence stats (last-done, count, average gap, current gap) are likewise derived by a shared function (`computeLogStats`) from its `LogEntry` occurrences, so every client shows the same numbers.
 
 Three rules hold across all of it:
 
