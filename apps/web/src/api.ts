@@ -50,11 +50,23 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
 
+/** An error carrying the HTTP status, so callers can distinguish a 401 — owned by the onUnauthorized
+ *  seam, which routes to login — from a genuine failure worth surfacing (ADR 0076 / v0.33.2). */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 /** For the raw-fetch helpers (no JSON body to parse): fire the 401 seam, then throw. */
 function ensureOk(res: Response): void {
   if (res.ok) return;
   if (res.status === 401) onUnauthorized?.();
-  throw new Error(`${res.status} ${res.statusText}`);
+  throw new ApiError(`${res.status} ${res.statusText}`, res.status);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -71,7 +83,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body && typeof body === 'object' && 'message' in body
         ? String((body as { message: unknown }).message)
         : `${res.status} ${res.statusText}`;
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
 
   return (await res.json()) as T;

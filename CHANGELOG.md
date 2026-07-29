@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.2] — 2026-07-29
+
+### Fixed
+
+- **A spurious "Unauthorized" banner on first login** — a red "Unauthorized" banner could briefly flash on the app right after logging in (you stayed logged in, and a refresh cleared it). It no longer appears: the app never refreshes before you're authenticated, and a 401 (which simply routes you to login) never surfaces as an error banner.
+
 ## [0.33.1] — 2026-07-29
 
 ### Fixed

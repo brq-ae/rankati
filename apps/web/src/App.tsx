@@ -78,6 +78,7 @@ import {
   updateList,
   updateLocation,
   updateTask,
+  ApiError,
 } from './api';
 
 /** Sentinel for the "create a new list" option in the picker. */
@@ -139,6 +140,11 @@ export default function App() {
    * or 'authed' (the app). A 401 mid-use drops us back to 'login' via the api.ts seam.
    */
   const [authState, setAuthState] = useState<'loading' | 'setup' | 'login' | 'authed'>('loading');
+  // Mirror authState into a ref so the once-subscribed focus/visibility reread reads the LIVE auth state
+  // without re-subscribing (like blockRef/pendingRef). The reread must never fire while unauthenticated,
+  // or its reads 401 and flash a stale "Unauthorized" banner on first login (v0.33.2).
+  const authedRef = useRef(false);
+  authedRef.current = authState === 'authed';
   const enterApp = (): void => {
     setLoading(true); // the main data load runs on the transition into 'authed'
     setAuthState('authed');
@@ -261,6 +267,13 @@ export default function App() {
     return nextLists;
   }
 
+  // A 401 is owned by the onUnauthorized seam (it routes to login); it must NEVER paint the global error
+  // banner (v0.33.2). Surface only genuine (non-401) failures.
+  const showError = (e: unknown) => {
+    if (e instanceof ApiError && e.status === 401) return;
+    setError((e as Error).message);
+  };
+
   // Decide the auth gate on load (ADR 0076): status routes to setup / login / the app.
   useEffect(() => {
     getAuthStatus()
@@ -282,9 +295,10 @@ export default function App() {
   // every entry into 'authed' (first login, or after a mid-use 401 and re-login).
   useEffect(() => {
     if (authState !== 'authed') return;
+    setError(null); // entering authed: mop up any stale banner left by a pre-auth transient (v0.33.2)
     refresh()
       .then((nextLists) => setListId(nextLists[0]?.id ?? NEW_LIST))
-      .catch((e: Error) => setError(e.message))
+      .catch(showError)
       .finally(() => setLoading(false));
   }, [authState]);
 
@@ -373,8 +387,9 @@ export default function App() {
    */
   useEffect(() => {
     const reread = () => {
+      if (!authedRef.current) return; // never reread while unauthenticated — the reads would 401 (v0.33.2)
       if (document.visibilityState === 'hidden') return;
-      void refresh().catch((e: Error) => setError(e.message));
+      void refresh().catch(showError);
     };
     window.addEventListener('focus', reread);
     document.addEventListener('visibilitychange', reread);
@@ -1245,7 +1260,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.33.1 — small cleanups</p>
+            <p className="text-sm text-muted">v0.33.2 — the login-flash fix</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
