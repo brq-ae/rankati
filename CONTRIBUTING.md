@@ -47,6 +47,3 @@ and you agree it is provided under **AGPL-3.0** **and** that you grant the proje
 sublicense, and **relicense** your contribution under any terms, including proprietary/commercial terms.
 This lets Rankati offer a hosted or commercially-licensed version while remaining open-source. If you
 don't agree, please don't submit contributions.
-
-> **Note:** this CLA is written in plain language for clarity, not as vetted legal advice. If you or your
-> employer intend to rely on it commercially, have a lawyer review it first.
