@@ -1237,7 +1237,7 @@ export default function App() {
   if (authState === 'login') return <Login onAuthenticated={enterApp} />;
 
   return (
-    <div ref={appRef} className="min-h-full bg-canvas text-fg">
+    <div ref={appRef} className="min-h-dvh bg-canvas text-fg">
       {/* The signature brand mark (ADR 0063) — a gradient stripe across the app top. Brand-only
           (CSS-scoped in index.css); absent on Slate/Warm/Clear. Decorative, hence aria-hidden. */}
       <div className="h-2 deck-brandbar" aria-hidden="true" />
@@ -1245,7 +1245,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.33.0 — logs & fixes</p>
+            <p className="text-sm text-muted">v0.33.1 — small cleanups</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is

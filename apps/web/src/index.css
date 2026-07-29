@@ -407,10 +407,24 @@
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
+/* Track the DYNAMIC viewport (v0.33.1) so the layout matches the VISUAL viewport as the mobile address
+   bar shows/hides. Pinned to a static full height (the large, toolbar-hidden viewport), the page is
+   taller than what's visible and taps land a few px above their target. `min-height` (not `height`) lets
+   the page still grow with content. Safe to drop the definite `height: 100%`: no `h-full` descendant
+   chains its height to these — each sits in a locally-sized parent.
+   The fallback is an `@supports` block, NOT the cascade: Lightning CSS drops a same-property `100vh`
+   declaration that precedes `100dvh`, so browsers without `dvh` would be left with nothing. */
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100vh; /* fallback for browsers without dvh */
+}
+@supports (min-height: 100dvh) {
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+  }
 }
 
 /*

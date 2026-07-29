@@ -2,10 +2,17 @@
  * The contract between apps/api and apps/web (ADR 0034).
  * Defined once, imported by both. No Prisma types cross this boundary (ADR 0033).
  *
- * This package is TYPES ONLY (ADR 0041). It emits no runtime JavaScript, so it needs no
- * build step and never has to reconcile Nest's CommonJS with Vite's ESM. Adding the first
- * runtime export — a constant, a function — reopens that question: read ADR 0041 first.
- * LOCAL_OWNER_ID lives in apps/api for exactly this reason.
+ * NOT types-only any more. It began as a types-only package (ADR 0041, no build step), but as of
+ * ADR 0086 it also ships PURE, dependency-free runtime functions — `computePin`, and since ADR 0087
+ * `computeLogStats` — so the web and the api/bot compute the identical pin and Log cadence stats. A
+ * conditional `exports` map preserves the no-build dev loop: the `types`/`browser` conditions resolve to
+ * `./src` (Vite, `tsc`, and `nest --watch` read the TypeScript source), while node's `default` resolves
+ * to a built CJS `./dist` — a `tsc` build the api image bakes in. The runtime risk (a
+ * `require('@rankati/shared')` that only fails PAST tsc + unit tests, which run against source) is
+ * guarded by an in-image `node`-against-`dist` require check.
+ *
+ * Keep additions here PURE and dependency-free. Server-only concerns (e.g. LOCAL_OWNER_ID) stay in
+ * apps/api — not because shared cannot hold values now, but because they are not part of the shared contract.
  */
 
 import type { LogStats } from './logs';
