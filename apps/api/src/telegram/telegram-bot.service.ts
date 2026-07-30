@@ -7,24 +7,28 @@ import {
   type TelegramInlineButton,
   type TelegramReplyMarkup,
 } from './telegram-bot.factory';
-import type { Task, TelegramBotStatus } from '@rankati/shared';
+import type { Impact, Routine, Task, TelegramBotStatus } from '@rankati/shared';
 import {
   decodeDiscard,
   decodeDone,
+  decodeListPick,
   decodePinSnooze,
   decodeRefile,
   DISCARD_TRIGGER,
   DONE_TRIGGER,
   encodeDiscard,
   encodeDone,
+  encodeListPick,
   encodePinSnooze,
   encodeRefile,
+  LIST_PICK_TRIGGER,
   PIN_SNOOZE_TRIGGER,
   REFILE_TRIGGER,
 } from './telegram-callback';
 import { TelegramCaptureService, type CaptureResult } from './telegram-capture.service';
 import { TelegramConfigService } from './telegram-config.service';
 import { TelegramReadService, type PinInfo } from './telegram-read.service';
+import type { LogSummary } from '../logs.service';
 import { PinSnoozeService } from '../pin-snooze.service';
 
 /** Read-command replies (Step 6). */
@@ -32,6 +36,23 @@ const NEEDS_TZ =
   'I need your timezone to know when "today" is. Set it in Settings → Telegram, then try again.';
 const NOTHING_PLAYABLE = 'Nothing playable right now. 🎉';
 const READ_FAILED = 'Could not read your tasks — please try again in a moment.';
+
+/** Display-only read views (ADR 0088). */
+const VIEW_CAP = 20; // tasks/routines/logs shown per view, then "…and M more"
+const LIST_BUTTON_CAP = 24; // list-picker buttons (2 per row), then "…and M more" in the text
+const ROUTINES_NEEDS_TZ =
+  'I need your timezone to order your reminders by due date. Set it in Settings → Telegram, then try again.';
+const LOGS_NO_TZ_HINT = 'Set a timezone in Settings → Telegram to also see “N days ago”.';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** 'YYYY-MM-DD' → "20 Jul", formatted from the parts so no timezone shifts the day. */
+function fmtDay(ymd: string): string {
+  const [, m, d] = ymd.split('-');
+  return `${Number(d)} ${MONTHS[Number(m) - 1]}`;
+}
+const dayCount = (n: number) => `${n} ${Math.abs(n) === 1 ? 'day' : 'days'}`;
+/** Whole days from `on` to `day` (negative = overdue), UTC-anchored so no timezone leaks in. */
+const daysBetween = (on: string, day: string) =>
+  Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${on}T00:00:00Z`)) / 86_400_000);
 
 /** Trim a title for an inline-button label. */
 function truncateLabel(s: string, max = 24): string {
@@ -45,6 +66,9 @@ const COMMANDS = [
   { command: 'today', description: "Today's hand" },
   { command: 'now', description: 'The top card' },
   { command: 'add', description: 'Capture a task' },
+  { command: 'lists', description: 'Browse your lists' },
+  { command: 'routines', description: 'Your reminders' },
+  { command: 'logs', description: 'Your logs' },
 ];
 
 /**
@@ -218,6 +242,97 @@ export class TelegramBotService implements OnModuleDestroy {
         return;
       }
       await ctx.reply(this.renderNow(card), { reply_markup: this.doneKeyboard(card, 'now') });
+    });
+
+    // /lists — a picker: one navigation button per list (ADR 0088). Tapping a list shows its ACTIVE tasks.
+    bot.command('lists', async (ctx) => {
+      if (!(await this.isBoundChat(ctx))) {
+        await ctx.reply(NOT_LINKED);
+        return;
+      }
+      let lists: Awaited<ReturnType<TelegramReadService['readLists']>>;
+      try {
+        lists = await this.read.readLists();
+      } catch (err) {
+        this.logError('/lists failed', err);
+        await ctx.reply(READ_FAILED);
+        return;
+      }
+      if (lists.length === 0) {
+        await ctx.reply('You have no lists yet.');
+        return;
+      }
+      const { text, keyboard } = this.renderListPicker(lists);
+      await ctx.reply(text, { reply_markup: keyboard });
+    });
+
+    // /routines — the Reminders in climb order (ADR 0088). The order is day-relative → needs a timezone.
+    bot.command('routines', async (ctx) => {
+      if (!(await this.isBoundChat(ctx))) {
+        await ctx.reply(NOT_LINKED);
+        return;
+      }
+      let res: Awaited<ReturnType<TelegramReadService['readRoutines']>>;
+      try {
+        res = await this.read.readRoutines();
+      } catch (err) {
+        this.logError('/routines failed', err);
+        await ctx.reply(READ_FAILED);
+        return;
+      }
+      if (res.status === 'no-timezone') {
+        await ctx.reply(ROUTINES_NEEDS_TZ);
+        return;
+      }
+      await ctx.reply(this.renderRoutines(res.routines, res.on));
+    });
+
+    // /logs — each log's last-done + cadence (ADR 0088). Partial-degrades without a timezone.
+    bot.command('logs', async (ctx) => {
+      if (!(await this.isBoundChat(ctx))) {
+        await ctx.reply(NOT_LINKED);
+        return;
+      }
+      let res: Awaited<ReturnType<TelegramReadService['readLogs']>>;
+      try {
+        res = await this.read.readLogs();
+      } catch (err) {
+        this.logError('/logs failed', err);
+        await ctx.reply(READ_FAILED);
+        return;
+      }
+      await ctx.reply(this.renderLogs(res));
+    });
+
+    // A /lists picker tap — NAVIGATION (ADR 0088), not an action. Gated on the bound chat exactly like
+    // done/refile/snooze; the list id is decode-or-rejected and ownership-verified (readListTasks → gone
+    // for a stale/foreign id). A reply shows the list's active tasks; the picker stays for another tap.
+    bot.callbackQuery(LIST_PICK_TRIGGER, async (ctx) => {
+      const chatId = String(ctx.chat?.id ?? '');
+      const { boundChatId } = await this.config.getBinding();
+      if (!boundChatId || chatId !== boundChatId) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const listId = decodeListPick(ctx.callbackQuery?.data ?? '');
+      if (!listId) {
+        await ctx.answerCallbackQuery('That button is no longer valid.');
+        return;
+      }
+      let res: Awaited<ReturnType<TelegramReadService['readListTasks']>>;
+      try {
+        res = await this.read.readListTasks(listId);
+      } catch (err) {
+        this.logError('/lists tasks failed', err);
+        await ctx.answerCallbackQuery('Could not read that list — please try again.');
+        return;
+      }
+      if (res.status === 'gone') {
+        await ctx.answerCallbackQuery('That list is no longer available.');
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      await ctx.reply(this.renderListTasks(res.name, res.tasks));
     });
 
     // A ✓ Done tap. Gated on the bound chat; ownership is verified before completing (a stale/foreign id
@@ -416,6 +531,71 @@ export class TelegramBotService implements OnModuleDestroy {
     }
     rows.push([{ text: '🗑 Discard', callback_data: encodeDiscard(taskId) }]);
     return { inline_keyboard: rows };
+  }
+
+  // ── Display-only read views (ADR 0088) ──────────────────────────────────────────────────────────────
+
+  /** The /lists picker: navigation buttons (2 per row), capped, with an overflow note pointing to the app. */
+  private renderListPicker(lists: { id: string; name: string }[]): { text: string; keyboard: TelegramReplyMarkup } {
+    const shown = lists.slice(0, LIST_BUTTON_CAP);
+    const rows: TelegramInlineButton[][] = [];
+    for (let i = 0; i < shown.length; i += 2) {
+      rows.push(shown.slice(i, i + 2).map((l) => ({ text: truncateLabel(l.name), callback_data: encodeListPick(l.id) })));
+    }
+    const more = lists.length - shown.length;
+    const text =
+      more > 0
+        ? `Your lists — tap one for its tasks.\n…and ${more} more (see the app).`
+        : 'Your lists — tap one for its tasks.';
+    return { text, keyboard: { inline_keyboard: rows } };
+  }
+
+  /** A list's ACTIVE tasks — titles, ⚠️ on high-impact, capped. Display-only, no buttons. */
+  private renderListTasks(name: string, tasks: { title: string; impact: Impact }[]): string {
+    if (tasks.length === 0) return `📋 ${name}\n(no active tasks)`;
+    const shown = tasks.slice(0, VIEW_CAP);
+    const lines = shown.map((t) => `${t.impact === 'high' ? '⚠️ ' : '• '}${t.title}`);
+    const more = tasks.length - shown.length;
+    if (more > 0) lines.push(`…and ${more} more`);
+    return `📋 ${name}\n${lines.join('\n')}`;
+  }
+
+  /** The Reminders in climb order — name + due/pace, capped. */
+  private renderRoutines(routines: Routine[], on: string): string {
+    if (routines.length === 0) return '⏰ No reminders.';
+    const shown = routines.slice(0, VIEW_CAP);
+    const lines = shown.map((r) => `• ${r.name} — ${this.routineDue(r, on)}`);
+    const more = routines.length - shown.length;
+    if (more > 0) lines.push(`…and ${more} more`);
+    return `⏰ Reminders\n${lines.join('\n')}`;
+  }
+
+  /** One routine's due/pace phrase: frequency shows period progress; due-based shows overdue/today/in-N-days. */
+  private routineDue(r: Routine, on: string): string {
+    if (r.type === 'frequency') return `${r.periodCount ?? 0}/${r.targetCount ?? 0} this ${r.periodUnit}`;
+    const days = daysBetween(on, r.nextDue ?? on);
+    return days < 0 ? `overdue ${dayCount(-days)}` : days === 0 ? 'due today' : `due in ${dayCount(days)}`;
+  }
+
+  /** Each log's last-done + cadence, partial-degrading without a timezone, capped. */
+  private renderLogs(res: { hasTimezone: boolean; logs: LogSummary[] }): string {
+    if (res.logs.length === 0) return '🗒 No logs.';
+    const shown = res.logs.slice(0, VIEW_CAP);
+    const lines = shown.map((l) => `• ${this.logLine(l)}`);
+    const more = res.logs.length - shown.length;
+    if (more > 0) lines.push(`…and ${more} more`);
+    if (!res.hasTimezone) lines.push('', LOGS_NO_TZ_HINT);
+    return `🗒 Logs\n${lines.join('\n')}`;
+  }
+
+  /** One log's line: 0 → "not logged yet"; 1 → "logged once on <date>"; ≥2 → recency + "usually ~N days". */
+  private logLine(l: LogSummary): string {
+    if (l.count === 0) return `${l.name} — not logged yet`;
+    if (l.count === 1) return `${l.name} — logged once on ${fmtDay(l.lastDoneOn as string)}`;
+    const avg = `usually ~${dayCount(Math.round(l.averageGapDays as number))}`;
+    const recency =
+      l.currentGapDays != null ? `${dayCount(l.currentGapDays)} ago` : `last done ${fmtDay(l.lastDoneOn as string)}`;
+    return `${l.name} — ${recency}, ${avg}`;
   }
 
   /** Today's hand + pin, ready to send: a rendered message (pin line above the hand), or a plain message

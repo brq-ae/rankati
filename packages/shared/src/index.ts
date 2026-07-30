@@ -684,6 +684,9 @@ export * from './pin';
 // Log cadence stats — pure logic shared across web + api (ADR 0087).
 export * from './logs';
 
+// The Routines climb order — pure logic shared across web + api/bot (ADRs 0066, 0088).
+export * from './routine-sort';
+
 /**
  * A Log (ADR 0087) — a pull-based cadence tracker, the opposite of a Routine (its occurrences ARE its
  * history; it never climbs or nags). Wholly outside the engine. `stats` is derived server-side against

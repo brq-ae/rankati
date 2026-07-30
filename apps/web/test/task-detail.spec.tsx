@@ -66,6 +66,15 @@ function stubFetch(): void {
             json: () => Promise.resolve({ id: 'loc-new', name, ownerId: 'local' }),
           } as unknown as Response);
         }
+        // createList returns a List — the create-a-list-and-move flow (v0.34.0).
+        if (url.includes('/api/lists') && method === 'POST') {
+          const name = init?.body ? (JSON.parse(String(init.body)) as { name: string }).name : 'X';
+          return Promise.resolve({
+            ok: true,
+            headers: { get: () => null },
+            json: () => Promise.resolve({ id: 'l-new', name, ownerId: 'local' }),
+          } as unknown as Response);
+        }
         if (url.includes('/api/tasks') && patchTaskFails) {
           return Promise.resolve({
             ok: false,
@@ -156,7 +165,7 @@ describe('opening', () => {
     expect(within(dialog).getByLabelText('Title')).toHaveProperty('value', 'Alpha');
     expect(within(dialog).getByLabelText('Not before')).toHaveProperty('value', '2026-12-25');
     expect(within(dialog).getByText(/Blocker/)).toBeTruthy();
-    expect(within(dialog).getByLabelText('List')).toHaveProperty('value', 'l1'); // its list, now a picker
+    expect(within(dialog).getByText(/currently.*Work/)).toBeTruthy(); // its list, now a create-or-move combobox
   });
 
   it('says so plainly when nothing blocks the task', async () => {
@@ -310,16 +319,61 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsBefore + 1);
   });
 
-  it('moves the task to another list through the same PATCH — listId only (0056)', async () => {
+  it('filter + pick an existing list moves through the same PATCH — listId only (0056)', async () => {
     TASKS = [task('a', 'Alpha', { listId: 'l1' })];
     render(<App />);
     await openDetail('Alpha');
 
-    const picker = within(document.querySelector('dialog')!).getByLabelText('List');
-    expect(picker).toHaveProperty('value', 'l1'); // current list is selected
-    fireEvent.change(picker, { target: { value: 'l2' } });
+    const dialog = document.querySelector('dialog')!;
+    fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'Hom' } }); // filter
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Home' })); // pick the match
 
     expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { listId: 'l2' } });
+    expect(sent.some((s) => s.url.includes('/api/lists') && s.method === 'POST')).toBe(false); // no new list
+  });
+
+  it('a NEW name creates the list then moves the task, in one action (v0.34.0)', async () => {
+    TASKS = [task('a', 'Alpha', { listId: 'l1' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'Errands' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Create Errands and move here/ }));
+
+    // create-then-move: the PATCH lands a microtask after the POST resolves
+    await waitFor(() => {
+      expect(sent).toContainEqual({ url: '/api/lists', method: 'POST', body: { name: 'Errands' } });
+      expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { listId: 'l-new' } });
+    });
+  });
+
+  it('a case-insensitive name match selects the existing list — no duplicate created', async () => {
+    TASKS = [task('a', 'Alpha', { listId: 'l1' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'home' } }); // lower-case
+    // no "+ Create" is offered for an exact (case-insensitive) match
+    expect(within(dialog).queryByRole('button', { name: /Create home/ })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Home' }));
+
+    expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { listId: 'l2' } });
+    expect(sent.some((s) => s.url.includes('/api/lists') && s.method === 'POST')).toBe(false);
+  });
+
+  it('rejects an empty/whitespace name — no create button, no requests', async () => {
+    TASKS = [task('a', 'Alpha', { listId: 'l1' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const combo = within(dialog).getByLabelText('Move to a list');
+    fireEvent.change(combo, { target: { value: '   ' } });
+    expect(within(dialog).queryByRole('button', { name: /Create/ })).toBeNull();
+    fireEvent.keyDown(combo, { key: 'Enter' });
+    expect(sent.some((s) => s.method !== 'GET')).toBe(false); // nothing sent
   });
 
   it('removes a dependency by sending the REMAINING set, not the removed one', async () => {
@@ -414,13 +468,13 @@ describe('the two-line layout (0056)', () => {
 });
 
 describe('native selects paint an OPAQUE surface, not the translucent field-bg (ADR 0062)', () => {
-  it('the detail List select uses bg-control-bg — its popup is browser-drawn and needs opacity', async () => {
+  it('the list move is a combobox INPUT (bg-field-bg), not a native select (v0.34.0)', async () => {
     TASKS = [task('a', 'Alpha')];
     render(<App />);
     await openDetail('Alpha');
-    const sel = within(document.querySelector('dialog')!).getByLabelText('List') as HTMLSelectElement;
-    expect(sel.className).toContain('bg-control-bg');
-    expect(sel.className).not.toContain('bg-field-bg');
+    const input = within(document.querySelector('dialog')!).getByLabelText('Move to a list');
+    expect(input.tagName).toBe('INPUT');
+    expect(input.className).toContain('bg-field-bg'); // an input wants field-bg; only native selects need control-bg
   });
 });
 

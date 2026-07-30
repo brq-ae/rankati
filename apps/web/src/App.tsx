@@ -880,6 +880,32 @@ export default function App() {
     await refresh(); // the new location shows in the picker even if the tag did not land
   }
 
+  /**
+   * Create a NEW list and move the task to it, in one action (v0.34.0). Two calls, not atomic — mirrors
+   * onCreateAndTagLocation: if the create lands but the move fails, surface it rather than leave the modal
+   * looking untouched. The case-insensitive-match-selects-existing path is handled in TaskDetail (it calls
+   * onSetList for an existing name), so this only ever runs for a genuinely new list name.
+   */
+  async function onCreateListAndMove(id: string, name: string): Promise<void> {
+    setError(null);
+    let created;
+    try {
+      created = await createList({ name });
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    try {
+      await updateTask(id, { listId: created.id });
+    } catch (e) {
+      setError(
+        `Created “${created.name}”, but moving the task failed: ${(e as Error).message}. ` +
+          'The list exists — pick it from the List field.',
+      );
+    }
+    await refresh(); // the new list shows even if the move did not land
+  }
+
   const locNameOf = (id: string) => locations.find((l) => l.id === id)?.name ?? 'this location';
 
   /** Add a location from the manager (ADR 0061). A case-insensitive duplicate surfaces as a 400. */
@@ -1260,7 +1286,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.33.2 — the login-flash fix</p>
+            <p className="text-sm text-muted">v0.34.0 — daily-use features</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1705,6 +1731,7 @@ export default function App() {
             locations={locations}
             onSetLocations={onSetTaskLocations}
             onCreateAndTagLocation={onCreateAndTagLocation}
+            onCreateListAndMove={onCreateListAndMove}
             error={error}
           />
         )}

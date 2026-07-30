@@ -18,6 +18,19 @@ const toDate = (day: string): Date => new Date(`${day}T00:00:00.000Z`);
 type LogWithEntries = Log & { entries: LogEntry[] };
 
 /**
+ * A per-log summary for the bot's display-only `/logs` (ADR 0088) — tz-OPTIONAL: `lastDoneOn`, `count`,
+ * and `averageGapDays` are timezone-independent so they always compute; `currentGapDays` ("N days ago")
+ * is null when no timezone is configured.
+ */
+export interface LogSummary {
+  name: string;
+  lastDoneOn: string | null;
+  count: number;
+  averageGapDays: number | null;
+  currentGapDays: number | null;
+}
+
+/**
  * Logs (ADR 0087) — pull-based cadence trackers, the OPPOSITE of a Routine: their occurrences ARE the
  * history, they never climb or nag, and the cadence stats are shown only when opened. Every method is
  * OWNER-SCOPED (0026, 0039) — a foreign/stale id reads as 404, never a silent success. Stats are derived
@@ -27,6 +40,34 @@ type LogWithEntries = Log & { entries: LogEntry[] };
 @Injectable()
 export class LogsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * All logs with tz-OPTIONAL cadence stats, for the bot's display-only `/logs` (ADR 0088). `on` is the
+   * client's local day, or null when no timezone is configured — then "days ago" (`currentGapDays`) is
+   * omitted while `lastDoneOn` + `averageGapDays` (which do not depend on the day) still show. Owner-scoped.
+   */
+  async readSummaries(on: string | null): Promise<LogSummary[]> {
+    const rows = await this.prisma.log.findMany({
+      where: { ownerId: LOCAL_OWNER_ID },
+      include: { entries: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((r) => {
+      // A placeholder day when `on` is unset: lastDoneOn/count/averageGapDays are on-independent; the
+      // resulting currentGapDays is discarded (nulled) below.
+      const stats = computeLogStats(
+        r.entries.map((e) => ({ doneOn: dayStr(e.doneOn) })),
+        on ?? '2000-01-01',
+      );
+      return {
+        name: r.name,
+        lastDoneOn: stats.lastDoneOn,
+        count: stats.count,
+        averageGapDays: stats.averageGapDays,
+        currentGapDays: on ? stats.currentGapDays : null,
+      };
+    });
+  }
 
   private entryDto(e: LogEntry): LogEntryDto {
     return { id: e.id, doneOn: dayStr(e.doneOn), createdAt: e.createdAt.toISOString() };

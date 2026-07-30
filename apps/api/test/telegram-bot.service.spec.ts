@@ -1,4 +1,4 @@
-import type { Task } from '@rankati/shared';
+import type { Routine, Task } from '@rankati/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
   TelegramBot,
@@ -6,7 +6,13 @@ import type {
   TelegramContext,
   TelegramReplyMarkup,
 } from '../src/telegram/telegram-bot.factory';
-import { encodeDiscard, encodeDone, encodePinSnooze, encodeRefile } from '../src/telegram/telegram-callback';
+import {
+  encodeDiscard,
+  encodeDone,
+  encodeListPick,
+  encodePinSnooze,
+  encodeRefile,
+} from '../src/telegram/telegram-callback';
 import type {
   CaptureResult,
   DiscardResult,
@@ -68,6 +74,11 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   let snoozeThrows: boolean;
   let completeResult: CompleteResult;
   let completeCalls: string[];
+  let listsResult: Awaited<ReturnType<TelegramReadService['readLists']>>;
+  let listTasksResult: Awaited<ReturnType<TelegramReadService['readListTasks']>>;
+  let listTasksCalls: string[];
+  let routinesResult: Awaited<ReturnType<TelegramReadService['readRoutines']>>;
+  let logsResult: Awaited<ReturnType<TelegramReadService['readLogs']>>;
   let setCommandsThrows: boolean;
   let service: TelegramBotService;
 
@@ -150,6 +161,13 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
       completeCalls.push(taskId);
       return completeResult;
     },
+    readLists: async () => listsResult,
+    readListTasks: async (id: string) => {
+      listTasksCalls.push(id);
+      return listTasksResult;
+    },
+    readRoutines: async () => routinesResult,
+    readLogs: async () => logsResult,
   } as unknown as TelegramReadService;
 
   const mockPinSnooze = {
@@ -187,6 +205,11 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     snoozeThrows = false;
     completeResult = { status: 'done', title: 'X' };
     completeCalls = [];
+    listsResult = [{ id: LIST_ID, name: 'Work' }];
+    listTasksResult = { status: 'ok', name: 'Work', tasks: [] };
+    listTasksCalls = [];
+    routinesResult = { status: 'ok', on: '2026-07-30', routines: [] };
+    logsResult = { hasTimezone: true, logs: [] };
     setCommandsThrows = false;
     service = new TelegramBotService(mockConfig, mockCapture, mockRead, mockPinSnooze, factory);
   });
@@ -654,5 +677,99 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     const { rec } = await fireCallback(bot, 42, 's:short');
     expect(snoozeCalls).toHaveLength(0);
     expect(rec.answers[0]).toContain('no longer valid');
+  });
+
+  // ---------------------------------------------------------------- read views (ADR 0088)
+  describe('read views (ADR 0088)', () => {
+    const BOUND = 100;
+    beforeEach(() => {
+      binding = { boundChatId: String(BOUND), linkCode: null };
+    });
+    const routine = (o: Partial<Routine>): Routine => o as unknown as Routine;
+
+    it('bound-chat gates /lists, /routines, /logs — a stranger gets NOT_LINKED', async () => {
+      const bot = await startedBot();
+      for (const cmd of ['lists', 'routines', 'logs']) {
+        const replies = await fire(bot.commandHandlers[cmd], 999, `/${cmd}`); // a stranger chat
+        expect(replies.join()).toMatch(/link/i); // NOT_LINKED
+      }
+    });
+
+    it('/lists shows a capped picker (≤24 buttons, 2/row) with an overflow note', async () => {
+      listsResult = Array.from({ length: 30 }, (_, i) => ({ id: `id-${i}`, name: `List ${i}` }));
+      const bot = await startedBot();
+      const { rec } = await fireCtx(bot.commandHandlers['lists'], makeCtx(BOUND, { text: '/lists' }));
+      const rows = rec.replies[0].markup!.inline_keyboard;
+      expect(rows.flat()).toHaveLength(24); // capped at 24
+      expect(rows.every((row) => row.length <= 2)).toBe(true); // 2 per row
+      expect(rec.replies[0].text).toMatch(/…and 6 more/);
+    });
+
+    it('the l: callback: stranger ignored; malformed + gone answered cleanly; ok shows the tasks', async () => {
+      const bot = await startedBot();
+      const stranger = await fireCallback(bot, 999, encodeListPick(LIST_ID));
+      expect(stranger.rec.answers).toEqual([undefined]); // spinner cleared, no reply
+      expect(stranger.rec.replies).toHaveLength(0);
+
+      const bad = await fireCallback(bot, BOUND, 'l:not-a-token');
+      expect(bad.rec.answers[0]).toMatch(/no longer valid/i);
+
+      listTasksResult = { status: 'gone' };
+      const gone = await fireCallback(bot, BOUND, encodeListPick(LIST_ID));
+      expect(gone.rec.answers[0]).toMatch(/no longer available/i);
+
+      listTasksResult = { status: 'ok', name: 'Work', tasks: [{ title: 'renew passport', impact: 'high' }] };
+      const ok = await fireCallback(bot, BOUND, encodeListPick(LIST_ID));
+      expect(listTasksCalls).toContain(LIST_ID);
+      expect(ok.rec.replies[0].text).toContain('📋 Work');
+      expect(ok.rec.replies[0].text).toContain('⚠️ renew passport'); // high-impact marker
+    });
+
+    it('a list view caps tasks at 20 with "…and M more"', async () => {
+      listTasksResult = {
+        status: 'ok',
+        name: 'Big',
+        tasks: Array.from({ length: 25 }, (_, i) => ({ title: `t${i}`, impact: 'none' as const })),
+      };
+      const bot = await startedBot();
+      const { rec } = await fireCallback(bot, BOUND, encodeListPick(LIST_ID));
+      expect(rec.replies[0].text).toMatch(/…and 5 more/);
+    });
+
+    it('/routines: no timezone → the set-a-timezone hint; with one → the climb order', async () => {
+      const bot = await startedBot();
+      routinesResult = { status: 'no-timezone' };
+      expect((await fire(bot.commandHandlers['routines'], BOUND, '/routines')).join()).toMatch(/timezone/i);
+
+      routinesResult = {
+        status: 'ok',
+        on: '2026-07-30',
+        routines: [
+          routine({ type: 'interval_floating', name: 'water plants', nextDue: '2026-08-02' }),
+          routine({ type: 'frequency', name: 'gym', periodCount: 1, targetCount: 3, periodUnit: 'week' }),
+        ],
+      };
+      const out = (await fire(bot.commandHandlers['routines'], BOUND, '/routines')).join();
+      expect(out).toContain('water plants — due in 3 days');
+      expect(out).toContain('gym — 1/3 this week');
+    });
+
+    it('/logs partial-degrades: last-done + average always; the "days ago" hint when no tz', async () => {
+      const bot = await startedBot();
+      logsResult = {
+        hasTimezone: false,
+        logs: [{ name: 'Haircut', lastDoneOn: '2026-07-20', count: 3, averageGapDays: 35, currentGapDays: null }],
+      };
+      const noTz = (await fire(bot.commandHandlers['logs'], BOUND, '/logs')).join();
+      expect(noTz).toContain('Haircut — last done 20 Jul, usually ~35 days');
+      expect(noTz).toMatch(/Set a timezone/);
+
+      logsResult = {
+        hasTimezone: true,
+        logs: [{ name: 'Haircut', lastDoneOn: '2026-07-20', count: 3, averageGapDays: 35, currentGapDays: 40 }],
+      };
+      const withTz = (await fire(bot.commandHandlers['logs'], BOUND, '/logs')).join();
+      expect(withTz).toContain('Haircut — 40 days ago, usually ~35 days');
+    });
   });
 });

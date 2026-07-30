@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Clock } from '../src/auth/clock';
 import { AppModule } from '../src/app.module';
 import { LOCAL_OWNER_ID } from '../src/constants';
+import { ListsService } from '../src/lists.service';
+import { LogsService } from '../src/logs.service';
 import { PrismaService } from '../src/prisma.service';
+import { RoutinesService } from '../src/routines/routines.service';
 import type { SettingsService } from '../src/settings.service';
 import { TasksService } from '../src/tasks.service';
 import { TelegramReadService } from '../src/telegram/telegram-read.service';
@@ -32,6 +35,9 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let tasks: TasksService;
+  let lists: ListsService;
+  let routines: RoutinesService;
+  let logs: LogsService;
   const madeListIds: string[] = [];
 
   const stubSettings = (config: PinDays = DEFAULT_PIN_DAYS) =>
@@ -39,13 +45,16 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
   const stubClock = (now: Date = new Date()): Clock => ({ now: () => now });
 
   // Real tasks/DB (timezone from the stub, not the shared config row).
-  const readWithTz = (timezone: string | null) =>
+  const readWithTz = (timezone: string | null, clock: Clock = stubClock()) =>
     new TelegramReadService(
       prisma,
       { getConfig: async () => ({ timezone }) } as unknown as TelegramConfigService,
       tasks,
       stubSettings(),
-      stubClock(),
+      lists,
+      routines,
+      logs,
+      clock,
     );
 
   // Deterministic pin inputs: findToday is mocked, timezone fixed, clock + config controlled.
@@ -55,6 +64,9 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
       { getConfig: async () => ({ timezone: 'UTC' }) } as unknown as TelegramConfigService,
       { findToday: async () => found } as unknown as TasksService,
       stubSettings(config),
+      lists,
+      routines,
+      logs,
       stubClock(NOW),
     );
 
@@ -64,10 +76,15 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
     await app.init();
     prisma = app.get(PrismaService);
     tasks = app.get(TasksService);
+    lists = app.get(ListsService);
+    routines = app.get(RoutinesService);
+    logs = app.get(LogsService);
   });
 
   afterAll(async () => {
     for (const id of madeListIds) await prisma.list.deleteMany({ where: { id } });
+    await prisma.routine.deleteMany({ where: { ownerId: LOCAL_OWNER_ID, name: { startsWith: 'Zzz' } } });
+    await prisma.log.deleteMany({ where: { ownerId: LOCAL_OWNER_ID, name: { startsWith: 'Zzz' } } });
     await app?.close();
   });
 
@@ -126,5 +143,59 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
     const config: PinDays = { ...DEFAULT_PIN_DAYS, highFuseDays: 100 };
     const res = await readWithPin([...FILLERS, mk('p', 'high', 10)], config).dealToday();
     expect(res.status === 'ok' && res.pin).toBeNull(); // 10 < 100 → no pin
+  });
+
+  // ── Display-only read views (ADR 0088) ──────────────────────────────────────────────────────────────
+  describe('read views (ADR 0088)', () => {
+    it('readLists returns the owner list set; readListTasks is active-only + ownership-verified', async () => {
+      const list = await prisma.list.create({ data: { name: 'Zzz Errands', ownerId: LOCAL_OWNER_ID } });
+      madeListIds.push(list.id);
+      await prisma.task.create({
+        data: { title: 'renew passport', listId: list.id, ownerId: LOCAL_OWNER_ID, impact: 'high' },
+      });
+      await prisma.task.create({
+        data: { title: 'old done', listId: list.id, ownerId: LOCAL_OWNER_ID, status: 'done' },
+      });
+
+      const svc = readWithTz(null); // /lists needs no timezone
+      expect(await svc.readLists()).toContainEqual({ id: list.id, name: 'Zzz Errands' });
+
+      const res = await svc.readListTasks(list.id);
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.name).toBe('Zzz Errands');
+        expect(res.tasks).toContainEqual({ title: 'renew passport', impact: 'high' });
+        expect(res.tasks.some((t) => t.title === 'old done')).toBe(false); // active only
+      }
+      expect(await svc.readListTasks('00000000-0000-0000-0000-000000000000')).toEqual({ status: 'gone' });
+    });
+
+    it('readRoutines: a timezone yields the climb order; none yields no-timezone (hint)', async () => {
+      await routines.create({ name: 'Zzz gym', type: 'frequency', on: '2026-07-30', periodUnit: 'week', targetCount: 3 });
+
+      expect(await readWithTz(null).readRoutines()).toEqual({ status: 'no-timezone' });
+      const res = await readWithTz('Asia/Dubai').readRoutines();
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') expect(res.routines.some((r) => r.name === 'Zzz gym')).toBe(true);
+    });
+
+    it('readLogs partial-degrades: last-done + average always; "days ago" only with a timezone', async () => {
+      const log = await prisma.log.create({ data: { name: 'Zzz Haircut', ownerId: LOCAL_OWNER_ID } });
+      await prisma.logEntry.create({ data: { logId: log.id, doneOn: new Date('2026-06-20T00:00:00.000Z') } });
+      await prisma.logEntry.create({ data: { logId: log.id, doneOn: new Date('2026-07-20T00:00:00.000Z') } });
+
+      const noTz = await readWithTz(null).readLogs();
+      expect(noTz.hasTimezone).toBe(false);
+      const a = noTz.logs.find((l) => l.name === 'Zzz Haircut')!;
+      expect(a.lastDoneOn).toBe('2026-07-20');
+      expect(a.averageGapDays).toBe(30); // 20 Jun → 20 Jul
+      expect(a.currentGapDays).toBeNull();
+
+      const withTz = await readWithTz('UTC', { now: () => new Date('2026-07-30T12:00:00.000Z') }).readLogs();
+      expect(withTz.hasTimezone).toBe(true);
+      const b = withTz.logs.find((l) => l.name === 'Zzz Haircut')!;
+      expect(b.averageGapDays).toBe(30);
+      expect(b.currentGapDays).toBe(10); // 20 Jul → 30 Jul
+    });
   });
 });

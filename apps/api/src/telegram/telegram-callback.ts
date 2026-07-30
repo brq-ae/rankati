@@ -130,6 +130,30 @@ export function decodePinSnooze(data: string): string | null {
   }
 }
 
+// ── List picker (ADR 0088) — /lists navigation buttons ──────────────────────────────────────────────
+
+const LIST_PICK_PREFIX = 'l:';
+
+/** The regex the transport routes /lists list-picker taps on (distinct from "m:"/"d:"/"x:"/"s:"). */
+export const LIST_PICK_TRIGGER = /^l:/;
+
+/** Pack a /lists picker button's payload: "l:" + base64url(listId) = 24 bytes. Navigation, not an action. */
+export function encodeListPick(listId: string): string {
+  return `${LIST_PICK_PREFIX}${uuidToToken(listId)}`;
+}
+
+/** Unpack a /lists picker payload → the list id, or null if malformed. */
+export function decodeListPick(data: string): string | null {
+  if (!data.startsWith(LIST_PICK_PREFIX)) return null;
+  const body = data.slice(LIST_PICK_PREFIX.length);
+  if (body.length !== TOKEN_LEN) return null;
+  try {
+    return tokenToUuid(body);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The lists offered as re-file buttons (ADR 0084): the input is already alphabetical (ListsService.findAll
  * orders by name, matching the web app). Drop the Inbox itself and cap the count; return what to show plus

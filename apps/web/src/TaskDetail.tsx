@@ -149,6 +149,13 @@ interface TaskDetailProps {
    */
   onCreateAndTagLocation: (id: string, name: string) => void;
   /**
+   * Create a NEW list and move this task to it, in one action (v0.34.0). Two calls, not atomic —
+   * mirrors onCreateAndTagLocation; App surfaces a create-succeeded-but-move-failed error rather than
+   * leaving the modal looking untouched. A case-insensitive name match is handled in TaskDetail (it
+   * selects the existing list via onSetList instead, so no duplicate is created).
+   */
+  onCreateListAndMove: (id: string, name: string) => void;
+  /**
    * The App-level error from an action taken in this modal — a cycle-rejection 400 from the
    * Requires picker, a create-and-tag partial failure (0061). Shown INSIDE the dialog: a banner
    * behind a showModal() dialog is in a lower layer and invisible, which would make the
@@ -186,6 +193,7 @@ export default function TaskDetail({
   locations,
   onSetLocations,
   onCreateAndTagLocation,
+  onCreateListAndMove,
   error,
 }: TaskDetailProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -601,6 +609,32 @@ export default function TaskDetail({
     setQuery('');
   };
 
+  // The list move is a create-or-move combobox (v0.34.0), mirroring the dependency picker above: type
+  // to filter existing lists and pick one to MOVE to, or name a NEW list to create + move to in one
+  // action. A case-insensitive name match selects the existing list — never a duplicate.
+  const [listQuery, setListQuery] = useState('');
+  const [listHighlight, setListHighlight] = useState(0);
+  useEffect(() => setListHighlight(0), [listQuery]);
+  const listTyped = listQuery.trim();
+  const listMatches =
+    listTyped === '' ? [] : lists.filter((l) => l.name.toLowerCase().includes(listTyped.toLowerCase()));
+  const listActiveIdx = listMatches.length > 0 ? Math.min(listHighlight, listMatches.length - 1) : -1;
+  const listActiveOption = listActiveIdx >= 0 ? listMatches[listActiveIdx] : undefined;
+  const listOptionId = (id: string) => `list-opt-${id}`;
+  const currentListName = lists.find((l) => l.id === task.listId)?.name ?? '(unknown)';
+  const listExactMatch = (name: string) => lists.find((l) => l.name.toLowerCase() === name.toLowerCase());
+  const moveToList = (listId: string) => {
+    if (listId !== task.listId) onSetList(task.id, listId);
+    setListQuery('');
+  };
+  const createOrMoveList = () => {
+    if (!listTyped) return; // reject empty/whitespace
+    const existing = listExactMatch(listTyped);
+    if (existing) moveToList(existing.id); // case-insensitive match → select, no duplicate
+    else onCreateListAndMove(task.id, listTyped); // new name → create + move
+    setListQuery('');
+  };
+
   // The location picker (ADRs 0060, 0061), mirroring the dependency picker above but for CONTEXT.
   const locName = (id: string) => locations.find((l) => l.id === id)?.name ?? '(deleted)';
   const locTyped = locQuery.trim();
@@ -705,20 +739,70 @@ export default function TaskDetail({
         {/* Move between lists (ADR 0056 follow-on). Changes ONLY the listId — dependencies, the
             dates, the tier and the Arena rating are logical, not organizational, and stay put; a
             dependency that crosses lists survives because the link is between task ids. */}
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted">List</span>
-          <select
-            value={task.listId}
-            onChange={(e) => onSetList(task.id, e.target.value)}
-            className="w-fit rounded-xl border border-field bg-control-bg px-2 py-1 text-sm"
-          >
-            {lists.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted">List — currently “{currentListName}”</span>
+          <input
+            value={listQuery}
+            onChange={(e) => setListQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (listMatches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                setListHighlight((h) =>
+                  e.key === 'ArrowDown' ? Math.min(h + 1, listMatches.length - 1) : Math.max(h - 1, 0),
+                );
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (listActiveOption) moveToList(listActiveOption.id);
+                else if (listTyped) createOrMoveList();
+              } else if (e.key === 'Escape') {
+                e.preventDefault(); // close the popup first (don't also close the modal)
+                setListQuery('');
+              }
+            }}
+            role="combobox"
+            aria-expanded={listMatches.length > 0}
+            aria-controls="list-move-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={listActiveOption ? listOptionId(listActiveOption.id) : undefined}
+            aria-label="Move to a list"
+            placeholder="Type to search, or name a new list…"
+            className="rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+          />
+          {listMatches.length > 0 && (
+            <ul id="list-move-listbox" role="listbox" className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+              {listMatches.map((l, i) => (
+                <li key={l.id} role="option" id={listOptionId(l.id)} aria-selected={i === listActiveIdx}>
+                  <button
+                    type="button"
+                    onClick={() => moveToList(l.id)}
+                    onMouseMove={() => setListHighlight(i)}
+                    aria-label={`Move to ${l.name}`}
+                    className={`w-full truncate rounded-xl px-2 py-1 text-left text-sm text-strong ${
+                      i === listActiveIdx ? 'bg-hover' : 'hover:bg-hover'
+                    }`}
+                  >
+                    {l.name}
+                    {l.id === task.listId ? ' (current)' : ''}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Create-or-move: offered when text is typed AND no case-insensitive exact match exists (an
+              exact match is pickable from the list above, so creating would duplicate it). */}
+          {listTyped !== '' && !listExactMatch(listTyped) && (
+            <div className="mt-1 border-t border-divider pt-2">
+              <button
+                type="button"
+                onClick={createOrMoveList}
+                aria-label={`Create ${listTyped} and move here`}
+                className="touch-manipulation rounded-xl bg-primary px-2 py-1 text-xs font-medium text-on-primary"
+              >
+                + Create “{listTyped}” &amp; move
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* The badge sits OUTSIDE the <label>. Inside, its text joins the input's
             accessible name — "Not before waiting for its day" — because a label names its

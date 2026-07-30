@@ -5,6 +5,15 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] — 2026-07-30
+
+Two daily-use features.
+
+### Added
+
+- **Create a list from inside a task** — the task detail's List field is now a type-to-search-or-create box: filter your lists and pick one to move the task, or type a new name to create the list and move the task to it in one action (no more making an empty list first). A name that matches an existing list (any capitalisation) just moves it there — no duplicate.
+- **View your lists, reminders, and logs from Telegram** — three read-only commands: **`/lists`** (tap a list to see its active tasks, with ⚠️ on high-impact), **`/routines`** (your reminders in the same order as the app), and **`/logs`** (each log's last-done and cadence, e.g. "Haircut — 40 days ago, usually ~35"). `/routines` and the "N days ago" in `/logs` use the timezone from your digest settings; set one to see them.
+
 ## [0.33.2] — 2026-07-29
 
 ### Fixed
