@@ -57,6 +57,8 @@ Rankati can connect to a Telegram bot **you** own — it runs inside the `rankat
 
 Capture by texting the bot; read with `/today` and `/now`; complete with the ✓ buttons. `/today` and the digest lead with your ⚠️ **impact pin** (the most-neglected important task) carrying **✓ Done** and **😴 Snooze**. The token is stored on your server (masked in the UI, never logged).
 
+It's an optional convenience — messages ride through Telegram, which isn't end-to-end encrypted, so keep anything truly sensitive in the app itself.
+
 ## Recovery — run on the box, no email
 
 There is no email-based password reset. Both escapes are **operator commands** run on the host, and

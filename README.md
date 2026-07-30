@@ -27,6 +27,17 @@ Rankati combines a few ideas most task apps keep separate:
   past its fuse while it's doable, one ⚠️ nudge floats above the hand. It never touches the ranking — just
   makes sure something important can't quietly rot.
 
+### Beyond the core engine
+
+- **Lists, Upcoming & Routines.** Group tasks into lists, see what's dated-but-not-yet-due in
+  Upcoming, and keep recurring rhythms as **Routines** — plus **Logs**, which track how often you
+  actually do a thing (a haircut, nails) and show your cadence, without nagging.
+- **Telegram bot (optional).** Capture a task, glance at your hand / lists / routines / logs, and get
+  a daily digest — from your phone, without opening the app. You run your *own* bot over long-polling,
+  so nothing is exposed to the internet and no ports are opened. Worth being clear about the trade-off:
+  messages route through Telegram, which isn't end-to-end encrypted — so keep anything genuinely
+  sensitive in the app itself.
+
 The full product concept lives in [`docs/CONCEPT.md`](docs/CONCEPT.md); the architecture is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
