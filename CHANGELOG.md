@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] — 2026-07-31
+
+### Changed
+
+- **Tidier Settings.** The Settings screen is now a compact list of collapsible sections — Appearance, Today & pins, Locations, Telegram, Account, and Reset — instead of one long scroll. Tap a section to expand it; everything works exactly as before, it's just easier to find.
+
 ## [0.34.0] — 2026-07-30
 
 Two daily-use features.

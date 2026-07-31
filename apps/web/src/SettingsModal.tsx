@@ -1,5 +1,5 @@
 import type { Location } from '@rankati/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import ChangePasswordForm from './ChangePasswordForm';
 import TelegramSettings from './TelegramSettings';
 import { DEFAULT_THRESHOLDS, type Thresholds } from './effort-prefs';
@@ -9,9 +9,42 @@ import type { Theme } from './palette';
 import ThemePicker from './ThemePicker';
 
 /**
- * Settings — two unrelated concerns behind the one gear: the THEME picker (the palette axis, ADR
- * 0062) and the LOCATION set (add/rename/delete/merge, ADRs 0060, 0061). A native <dialog> with
- * showModal(), same as TaskDetail — the focus trap, Escape and backdrop come with it.
+ * One collapsible settings row — a native `<details>`/`<summary>`, so focus, keyboard and a11y come from
+ * the platform (like the `<dialog>` and native `<select>` elsewhere here), with no JS toggle state and no
+ * library. The WebKit disclosure triangle is hidden (`list-none` alone does NOT kill it on Safari/iOS, so
+ * the `::-webkit-details-marker` reset is added too), replaced by a token-coloured chevron that rotates
+ * when the row opens. Theme tokens only, so it works in every palette and light/dark.
+ */
+function Row({
+  title,
+  danger = false,
+  detailsRef,
+  children,
+}: {
+  title: string;
+  danger?: boolean;
+  detailsRef?: Ref<HTMLDetailsElement>;
+  children: ReactNode;
+}) {
+  return (
+    <details ref={detailsRef} className="group border-t border-divider">
+      <summary className="flex cursor-pointer touch-manipulation list-none items-center justify-between gap-3 rounded-lg px-1 py-3 text-xs font-medium uppercase tracking-wide hover:bg-hover [&::-webkit-details-marker]:hidden">
+        <span className={danger ? 'text-danger' : 'text-muted'}>{title}</span>
+        <span
+          aria-hidden="true"
+          className={`shrink-0 transition-transform group-open:rotate-90 ${danger ? 'text-danger' : 'text-faint'}`}
+        >
+          ▸
+        </span>
+      </summary>
+      <div className="flex flex-col gap-4 px-1 pb-4">{children}</div>
+    </details>
+  );
+}
+
+/**
+ * Settings — a compact accordion of collapsible rows behind the one gear (v0.35.0). A native `<dialog>`
+ * with `showModal()`, same as TaskDetail — the focus trap, Escape and backdrop come with it.
  *
  * This modal is CONTROLS ONLY. The destructive warnings (how many tasks a delete or merge touches,
  * which would lose their only location) are computed in App from the FULL task list and confirmed
@@ -20,6 +53,12 @@ import ThemePicker from './ThemePicker';
  *
  * The light/dark MODE toggle is deliberately NOT here — it lives in the header (a frequent quick
  * action), while the theme is a set-and-forget choice that belongs with the other settings.
+ *
+ * LAYOUT INVARIANTS (the v0.35.0 accordion — keep these; a future edit could silently undo them):
+ *   (a) every row opens COLLAPSED — plain `<details>` with no `open`, and no exclusive `name` grouping;
+ *   (b) Reset is ALWAYS the last row and its summary is red (`text-danger`);
+ *   (c) the Locations row FORCE-OPENS whenever the App-level `error` is set (the effect below), so a
+ *       manager error (uniqueness-400 / failed merge) is never left invisible inside a collapsed row.
  */
 export default function SettingsModal({
   theme,
@@ -72,6 +111,7 @@ export default function SettingsModal({
   onLogout: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const locationsRef = useRef<HTMLDetailsElement>(null);
   const [addName, setAddName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -90,6 +130,13 @@ export default function SettingsModal({
   useEffect(() => {
     dialogRef.current?.showModal();
   }, []);
+
+  // INVARIANT (c): the App-level `error` belongs to the Locations block, so force that row open when one
+  // arrives — a uniqueness-400 / failed-merge must never sit invisible inside a collapsed row (0061).
+  // Ref is null-safe (attached after mount).
+  useEffect(() => {
+    if (error && locationsRef.current) locationsRef.current.open = true;
+  }, [error]);
 
   const commitHandSize = () => {
     const n = Number(sizeStr);
@@ -153,8 +200,8 @@ export default function SettingsModal({
       aria-label="Settings"
       className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-2xl bg-card p-0 text-fg shadow-lg backdrop:bg-backdrop"
     >
-      <div className="flex flex-col gap-4 p-5">
-        <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col p-5">
+        <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-xs font-medium uppercase tracking-wide text-faint">Settings</h2>
           <button
             type="button"
@@ -166,128 +213,128 @@ export default function SettingsModal({
           </button>
         </div>
 
-        {/* Theme (the palette axis, 0062). Set-and-forget, so it leads. Mode stays in the header. */}
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium text-muted">Theme</span>
+        {/* 1. Appearance — the theme picker (the palette axis, 0062). Mode stays in the header. */}
+        <Row title="Appearance">
           <ThemePicker theme={theme} mode={mode} onSelect={onSelectTheme} />
-        </div>
+        </Row>
 
-        {/* Effort blocks (ADR 0072) — the two minute thresholds that LABEL the Today block picker.
-            DISPLAY ONLY: they shape what "Quick" / "Medium" / "Long" mean to you, but only the
-            ordinal bucket is ever sent to the server. Long is whatever is bigger than Medium. */}
-        <div className="flex flex-col gap-2 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-faint">Effort blocks</span>
-          <div className="flex flex-wrap items-end gap-3 text-sm">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted">Quick: up to</span>
-              <span className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  value={quickStr}
-                  onChange={(e) => setQuickStr(e.target.value)}
-                  onBlur={commitThresholds}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitThresholds();
-                  }}
-                  aria-label="Quick block, up to how many minutes"
-                  className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
-                />
-                <span className="text-muted">min</span>
-              </span>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted">Medium: up to</span>
-              <span className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  value={mediumStr}
-                  onChange={(e) => setMediumStr(e.target.value)}
-                  onBlur={commitThresholds}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitThresholds();
-                  }}
-                  aria-label="Medium block, up to how many minutes"
-                  className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
-                />
-                <span className="text-muted">min</span>
-              </span>
-            </label>
+        {/* 2. Today & pins — the three tuning knobs together: the effort blocks that LABEL the Today
+            block picker (0072, display-only — only the ordinal bucket is sent), the dealt-hand size
+            (0074), and the impact-pin fuses/snoozes (0075). Same string-while-typing / commit-on-blur /
+            snap-back as before. */}
+        <Row title="Today & pins">
+          {/* Effort blocks — Long is whatever is bigger than Medium. */}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-faint">Effort blocks</span>
+            <div className="flex flex-wrap items-end gap-3 text-sm">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted">Quick: up to</span>
+                <span className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={quickStr}
+                    onChange={(e) => setQuickStr(e.target.value)}
+                    onBlur={commitThresholds}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitThresholds();
+                    }}
+                    aria-label="Quick block, up to how many minutes"
+                    className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+                  />
+                  <span className="text-muted">min</span>
+                </span>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted">Medium: up to</span>
+                <span className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={mediumStr}
+                    onChange={(e) => setMediumStr(e.target.value)}
+                    onBlur={commitThresholds}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitThresholds();
+                    }}
+                    aria-label="Medium block, up to how many minutes"
+                    className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+                  />
+                  <span className="text-muted">min</span>
+                </span>
+              </label>
+            </div>
+            <span className="text-xs text-faint">
+              Long is anything over {mediumStr || DEFAULT_THRESHOLDS.mediumMax} min. These labels are
+              yours alone — the ranking uses the bucket, never the minutes.
+            </span>
           </div>
-          <span className="text-xs text-faint">
-            Long is anything over {mediumStr || DEFAULT_THRESHOLDS.mediumMax} min. These labels are
-            yours alone — the ranking uses the bucket, never the minutes.
-          </span>
-        </div>
 
-        {/* The dealt-hand size (ADR 0074) — how many cards Today deals. Changing it re-caps the shown
-            hand: fewer with a smaller N, empty slots (for Deal again) with a larger N — no auto-grow. */}
-        <div className="flex flex-col gap-2 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-faint">Today hand</span>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-xs font-medium text-muted">Cards per hand</span>
-            <input
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={sizeStr}
-              onChange={(e) => setSizeStr(e.target.value)}
-              onBlur={commitHandSize}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitHandSize();
-              }}
-              aria-label="Cards per hand"
-              className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
-            />
-          </label>
-          <span className="text-xs text-faint">
-            How many cards Today deals. A smaller hand shows fewer; a larger one leaves empty slots for
-            Deal again — it never pulls new cards in on its own.
-          </span>
-        </div>
-
-        {/* Impact pin (ADR 0075) — the two FUSES (when a nag fires) and the two SNOOZE spans (how long
-            a dismissal lasts). Same string-while-typing / commit-on-blur / snap-back as the hand size. */}
-        <div className="flex flex-col gap-2 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-faint">Impact pin</span>
-          {(
-            [
-              { field: 'highFuseDays', label: 'High impact nags after' },
-              { field: 'mediumFuseDays', label: 'Medium impact nags after' },
-              { field: 'highSnoozeDays', label: 'Snooze a high-impact nudge for' },
-              { field: 'mediumSnoozeDays', label: 'Snooze a medium-impact nudge for' },
-            ] as const
-          ).map(({ field, label }) => (
-            <label key={field} className="flex items-center gap-2 text-sm">
-              <span className="min-w-0 flex-1 text-xs font-medium text-muted">{label}</span>
+          {/* The dealt-hand size (0074) — a smaller N shows fewer, a larger one leaves empty slots. */}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-faint">Today hand</span>
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-xs font-medium text-muted">Cards per hand</span>
               <input
                 type="number"
                 min={1}
                 inputMode="numeric"
-                value={dayStr[field]}
-                onChange={(e) => setDayStr((prev) => ({ ...prev, [field]: e.target.value }))}
-                onBlur={() => commitPinDay(field)}
+                value={sizeStr}
+                onChange={(e) => setSizeStr(e.target.value)}
+                onBlur={commitHandSize}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitPinDay(field);
+                  if (e.key === 'Enter') commitHandSize();
                 }}
-                aria-label={label}
-                className="w-16 shrink-0 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+                aria-label="Cards per hand"
+                className="w-16 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
               />
-              <span className="shrink-0 text-xs text-muted">days</span>
             </label>
-          ))}
-          <span className="text-xs text-faint">
-            A nudge fires when a Medium/High task sits unfinished past its "nags after" days; Snooze hides
-            it for the set days, then it returns if still neglected.
-          </span>
-        </div>
+            <span className="text-xs text-faint">
+              How many cards Today deals. A smaller hand shows fewer; a larger one leaves empty slots for
+              Deal again — it never pulls new cards in on its own.
+            </span>
+          </div>
 
-        <div className="flex flex-col gap-4 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-faint">Locations</span>
+          {/* Impact pin (0075) — the two FUSES (when a nag fires) and the two SNOOZE spans. */}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-faint">Impact pin</span>
+            {(
+              [
+                { field: 'highFuseDays', label: 'High impact nags after' },
+                { field: 'mediumFuseDays', label: 'Medium impact nags after' },
+                { field: 'highSnoozeDays', label: 'Snooze a high-impact nudge for' },
+                { field: 'mediumSnoozeDays', label: 'Snooze a medium-impact nudge for' },
+              ] as const
+            ).map(({ field, label }) => (
+              <label key={field} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 text-xs font-medium text-muted">{label}</span>
+                <input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  value={dayStr[field]}
+                  onChange={(e) => setDayStr((prev) => ({ ...prev, [field]: e.target.value }))}
+                  onBlur={() => commitPinDay(field)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitPinDay(field);
+                  }}
+                  aria-label={label}
+                  className="w-16 shrink-0 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+                />
+                <span className="shrink-0 text-xs text-muted">days</span>
+              </label>
+            ))}
+            <span className="text-xs text-faint">
+              A nudge fires when a Medium/High task sits unfinished past its "nags after" days; Snooze hides
+              it for the set days, then it returns if still neglected.
+            </span>
+          </div>
+        </Row>
 
+        {/* 3. Locations — the add/rename/delete/merge CRUD (0060, 0061). Force-opens on error (invariant c). */}
+        <Row title="Locations" detailsRef={locationsRef}>
           {/* Add */}
           <div className="flex items-end gap-2">
             <label className="flex flex-1 flex-col gap-1">
@@ -312,7 +359,7 @@ export default function SettingsModal({
           </div>
 
           {/* Errors from add / rename / delete / merge surface HERE, beside the controls that raised
-              them — never in the App banner behind this modal (0061). */}
+              them — never in the App banner behind this modal (0061). The row is force-opened above. */}
           {error && (
             <p
               role="alert"
@@ -416,18 +463,15 @@ export default function SettingsModal({
               </div>
             </div>
           )}
-        </div>
+        </Row>
 
-        {/* Telegram bot (ADR 0084) — self-contained: reads/writes the authed endpoints itself, so it needs
-            no props threaded through App. */}
-        <TelegramSettings />
+        {/* 4. Telegram bot (0084) — self-contained: reads/writes the authed endpoints itself. */}
+        <Row title="Telegram">
+          <TelegramSettings />
+        </Row>
 
-        {/* Reset (ADR 0064). Two named intents, not a checkbox matrix — "Keep sample data" is one
-            clearly-labelled option on the one mode it applies to. These are TRIGGERS ONLY: each hands
-            off to App, which shows the typed-DELETE confirmation over this modal (the friction, and
-            the blast-radius count from the full task list, live there). */}
-        <div className="flex flex-col gap-3 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted">Account</span>
+        {/* 5. Account — change password + log out (0076). */}
+        <Row title="Account">
           <ChangePasswordForm />
           <button
             type="button"
@@ -436,11 +480,12 @@ export default function SettingsModal({
           >
             Log out
           </button>
-        </div>
+        </Row>
 
-        <div className="flex flex-col gap-3 border-t border-divider pt-4">
-          <span className="text-xs font-medium uppercase tracking-wide text-danger">Reset</span>
-
+        {/* 6. Reset (0064) — ALWAYS LAST, red summary (invariant b). Two named intents, not a checkbox
+            matrix. These are TRIGGERS ONLY: each hands off to App, which shows the typed-DELETE
+            confirmation over this modal (the friction + blast-radius count live there). */}
+        <Row title="Reset" danger>
           <div className="flex flex-col gap-1">
             <button
               type="button"
@@ -476,7 +521,7 @@ export default function SettingsModal({
               theme is kept.
             </p>
           </div>
-        </div>
+        </Row>
       </div>
     </dialog>
   );
