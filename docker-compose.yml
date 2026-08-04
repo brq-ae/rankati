@@ -30,7 +30,7 @@ services:
       retries: 10
 
   api:
-    image: brqae/rankati-api:${RANKATI_VERSION:-0.35.0}
+    image: brqae/rankati-api:${RANKATI_VERSION:-0.36.0}
     container_name: rankati-api
     restart: unless-stopped
     depends_on:
@@ -64,7 +64,7 @@ services:
       start_period: 60s
 
   web:
-    image: brqae/rankati-web:${RANKATI_VERSION:-0.35.0}
+    image: brqae/rankati-web:${RANKATI_VERSION:-0.36.0}
     container_name: rankati-web
     restart: unless-stopped
     depends_on:

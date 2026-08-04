@@ -325,11 +325,43 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     await openDetail('Alpha');
 
     const dialog = document.querySelector('dialog')!;
+    fireEvent.focus(within(dialog).getByLabelText('Move to a list'));
     fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'Hom' } }); // filter
     fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Home' })); // pick the match
 
     expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { listId: 'l2' } });
     expect(sent.some((s) => s.url.includes('/api/lists') && s.method === 'POST')).toBe(false); // no new list
+  });
+
+  it('browse-first: focus shows ALL lists incl. the current one marked "(current)", sorted A–Z (0089)', async () => {
+    TASKS = [task('a', 'Alpha', { listId: 'l1' })]; // l1 = Work; lists are Work, Home
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const input = within(dialog).getByLabelText('Move to a list');
+    expect(within(dialog).queryAllByRole('button', { name: /^Move to / })).toHaveLength(0); // closed until focus
+    fireEvent.focus(input);
+    // All lists shown with no typing, A–Z (Home before Work); the current list is marked.
+    const rows = within(dialog).getAllByRole('button', { name: /^Move to / });
+    expect(rows.map((b) => b.textContent)).toEqual(['Home', 'Work (current)']);
+  });
+
+  it('Escape closes the list menu (and blur closes it too) (0089)', async () => {
+    TASKS = [task('a', 'Alpha', { listId: 'l1' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const input = within(dialog).getByLabelText('Move to a list');
+    fireEvent.focus(input);
+    expect(within(dialog).getByRole('button', { name: 'Move to Home' })).toBeTruthy(); // open
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(dialog).queryByRole('button', { name: 'Move to Home' })).toBeNull(); // closed
+
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(within(dialog).queryByRole('button', { name: 'Move to Home' })).toBeNull();
   });
 
   it('a NEW name creates the list then moves the task, in one action (v0.34.0)', async () => {
@@ -338,6 +370,7 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     await openDetail('Alpha');
 
     const dialog = document.querySelector('dialog')!;
+    fireEvent.focus(within(dialog).getByLabelText('Move to a list'));
     fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'Errands' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /Create Errands and move here/ }));
 
@@ -354,6 +387,7 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     await openDetail('Alpha');
 
     const dialog = document.querySelector('dialog')!;
+    fireEvent.focus(within(dialog).getByLabelText('Move to a list'));
     fireEvent.change(within(dialog).getByLabelText('Move to a list'), { target: { value: 'home' } }); // lower-case
     // no "+ Create" is offered for an exact (case-insensitive) match
     expect(within(dialog).queryByRole('button', { name: /Create home/ })).toBeNull();
@@ -370,6 +404,7 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
 
     const dialog = document.querySelector('dialog')!;
     const combo = within(dialog).getByLabelText('Move to a list');
+    fireEvent.focus(combo);
     fireEvent.change(combo, { target: { value: '   ' } });
     expect(within(dialog).queryByRole('button', { name: /Create/ })).toBeNull();
     fireEvent.keyDown(combo, { key: 'Enter' });
@@ -513,19 +548,21 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
   const search = () =>
     within(document.querySelector('dialog')!).getByLabelText('Add something this requires');
 
-  it('shows NO results list until something is typed — you narrow, not scroll a wall', async () => {
-    // With a large task set an all-candidates list on an empty box is a wall that also shoves
-    // "+ Create" off-screen. Results appear only once there is a query.
+  it('browse-first: focusing shows ALL eligible tasks, sorted A–Z, before any typing (0089)', async () => {
+    // Browse-first (0089) reverses the old type-first rule: you no longer have to remember a name.
+    // Focus the box and every eligible task drops down at once, alphabetical; the option list is
+    // closed until then (so an untouched panel is calm and "+ Create" is not shoved off-screen).
     TASKS = [task('a', 'Alpha'), task('b', 'Buy milk'), task('c', 'Buy bread')];
     render(<App />);
     await openDetail('Alpha');
 
     const dialog = document.querySelector('dialog')!;
-    expect(within(dialog).getByLabelText('Add something this requires')).toBeTruthy(); // the input IS there
-    expect(within(dialog).queryAllByRole('button', { name: /^Require / })).toHaveLength(0); // ...but no rows
-    // whitespace is still empty
-    fireEvent.change(within(dialog).getByLabelText('Add something this requires'), { target: { value: '   ' } });
-    expect(within(dialog).queryAllByRole('button', { name: /^Require / })).toHaveLength(0);
+    const input = within(dialog).getByLabelText('Add something this requires');
+    expect(within(dialog).queryAllByRole('button', { name: /^Require / })).toHaveLength(0); // closed until focus
+    fireEvent.focus(input);
+    // Alpha is the open task → excluded as self; the other two show with NO query typed, sorted A–Z.
+    const rows = within(dialog).getAllByRole('button', { name: /^Require / });
+    expect(rows.map((b) => b.textContent)).toEqual(['Buy bread', 'Buy milk']);
   });
 
   it('a broad match stays in a bounded, scrollable box — never a wall, Create stays reachable', async () => {
@@ -536,14 +573,76 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     await openDetail('Alpha');
 
     const dialog = document.querySelector('dialog')!;
-    fireEvent.change(within(dialog).getByLabelText('Add something this requires'), { target: { value: 'buy' } });
+    const input = within(dialog).getByLabelText('Add something this requires');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'buy' } });
 
     const options = within(dialog).getAllByRole('button', { name: /^Require Buy item/ });
-    expect(options.length).toBe(20); // all present — reachable by scrolling inside the box
+    expect(options.length).toBe(20); // all present (≤ the 50 cap) — reachable by scrolling inside the box
     const list = options[0]!.closest('ul')!;
     expect(list.className).toMatch(/overflow-y-auto/); // ...but the box scrolls rather than growing
     expect(list.className).toMatch(/max-h-/);
     expect(within(dialog).getByRole('button', { name: /Create buy and require it/i })).toBeTruthy(); // still there
+  });
+
+  it('Enter-safe: focusing then pressing Enter with NO query adds no dependency (-1 sentinel, 0089)', async () => {
+    // Browse-all shows options, but none is pre-active, so a stray Enter on an untouched box is inert.
+    TASKS = [task('a', 'Alpha'), task('b', 'Blocker')];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const input = within(dialog).getByLabelText('Add something this requires');
+    fireEvent.focus(input);
+    expect(within(dialog).getByRole('button', { name: /Require Blocker/i })).toBeTruthy(); // menu IS open
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(sent.some((s) => s.method !== 'GET')).toBe(false); // nothing sent — no dependency added
+  });
+
+  it('Escape closes the menu and clears the query; blur closes it too (0089)', async () => {
+    TASKS = [task('a', 'Alpha'), task('b', 'Blocker')];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const input = within(dialog).getByLabelText('Add something this requires');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'block' } });
+    expect(within(dialog).getByRole('button', { name: /Require Blocker/i })).toBeTruthy(); // open
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(dialog).queryByRole('button', { name: /Require Blocker/i })).toBeNull(); // closed
+    expect(input).toHaveProperty('value', ''); // query cleared
+
+    // Re-open, then blur: the menu closes (query is left as-is on blur, unlike Escape).
+    fireEvent.focus(input);
+    expect(within(dialog).getByRole('button', { name: /Require Blocker/i })).toBeTruthy();
+    fireEvent.blur(input);
+    expect(within(dialog).queryByRole('button', { name: /Require Blocker/i })).toBeNull();
+  });
+
+  it('caps the eligible set at 50 with a "keep typing to narrow…" hint — browse-all AND filtered (0089)', async () => {
+    // 60 eligible tasks: the rendered set is capped at 50 (alphabetical) so a big backlog never
+    // walls the panel; a faint hint row stands in for the remainder, and it is NOT a pickable option.
+    TASKS = [task('a', 'Alpha'), ...Array.from({ length: 60 }, (_, i) => task(`b${i}`, `Buy item ${String(i).padStart(2, '0')}`))];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const dialog = document.querySelector('dialog')!;
+    const input = within(dialog).getByLabelText('Add something this requires');
+    const rows = () => within(dialog).getAllByRole('button', { name: /^Require Buy item/ });
+    fireEvent.focus(input); // browse-all: 60 eligible → 50 shown + hint
+    expect(rows()).toHaveLength(50);
+    expect(within(dialog).getByText(/keep typing to narrow/i)).toBeTruthy();
+
+    // Filtered wide: 'buy' still matches all 60 → same cap + hint (the guard is on any large set).
+    fireEvent.change(input, { target: { value: 'buy' } });
+    expect(rows()).toHaveLength(50);
+    expect(within(dialog).getByText(/keep typing to narrow/i)).toBeTruthy();
+
+    // Narrow enough to fall under the cap → the hint is gone.
+    fireEvent.change(input, { target: { value: 'Buy item 0' } }); // matches 00–09 = 10
+    expect(rows()).toHaveLength(10);
+    expect(within(dialog).queryByText(/keep typing to narrow/i)).toBeNull();
   });
 
   it('filters by substring as you type', async () => {
@@ -556,6 +655,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'buy' } });
     const dialog = document.querySelector('dialog')!;
     expect(within(dialog).getByRole('button', { name: /Require Buy milk/i })).toBeTruthy();
@@ -568,6 +668,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'alpha' } });
     const dialog = document.querySelector('dialog')!;
     // Both titles match the query; only the OTHER task may be offered — the server would
@@ -581,6 +682,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'blocker' } });
     const dialog = document.querySelector('dialog')!;
     expect(within(dialog).queryByRole('button', { name: /Require Blocker$/i })).toBeNull();
@@ -592,6 +694,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'another' } });
     fireEvent.click(screen.getByRole('button', { name: /Require Another/i }));
 
@@ -610,6 +713,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'Buy' } });
     expect(screen.getByRole('button', { name: /Require Buy milk/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Create Buy and require it/i })).toBeTruthy();
@@ -661,6 +765,7 @@ describe('the dependency picker (ADRs 0053, 0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(search());
     fireEvent.change(search(), { target: { value: 'block' } });
     fireEvent.click(screen.getByRole('button', { name: /Require Blocker/i }));
     expect(search()).toHaveProperty('value', '');
@@ -672,12 +777,30 @@ describe('the WHERE picker — location tags, and the DIVERGENCE from Requires (
   const HOME: Location = { id: 'h', name: 'Home', ownerId: 'local' };
   const whereSearch = () => screen.getByLabelText('Add a place');
 
+  it('browse-first: focus shows all UNTAGGED places A–Z; a tagged one is excluded; Escape closes (0089)', async () => {
+    LOCATIONS = [GARAGE, HOME]; // Garage, Home
+    TASKS = [task('a', 'Alpha', { locationIds: ['g'] })]; // Garage already tagged
+    render(<App />);
+    await openDetail('Alpha');
+
+    const input = whereSearch();
+    expect(screen.queryAllByRole('button', { name: /^Add location / })).toHaveLength(0); // closed until focus
+    fireEvent.focus(input);
+    // Only Home shows (Garage is tagged); browse-all, no typing, and it would be A–Z if more remained.
+    const rows = screen.getAllByRole('button', { name: /^Add location / });
+    expect(rows.map((b) => b.textContent)).toEqual(['Home']);
+
+    fireEvent.keyDown(input, { key: 'Escape' }); // Escape closes the popup
+    expect(screen.queryAllByRole('button', { name: /^Add location / })).toHaveLength(0);
+  });
+
   it('matches locations case-insensitively and tags by REPLACING the set (0060)', async () => {
     LOCATIONS = [GARAGE, HOME];
     TASKS = [task('a', 'Alpha')];
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(whereSearch());
     fireEvent.change(whereSearch(), { target: { value: 'gar' } }); // lowercase query, 'Garage' value
     fireEvent.click(screen.getByRole('button', { name: /Add location Garage/i }));
     expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { locationIds: ['g'] } });
@@ -689,6 +812,7 @@ describe('the WHERE picker — location tags, and the DIVERGENCE from Requires (
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(whereSearch());
     fireEvent.change(whereSearch(), { target: { value: 'home' } });
     fireEvent.click(screen.getByRole('button', { name: /Add location Home/i }));
     expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { locationIds: ['g', 'h'] } });
@@ -699,6 +823,7 @@ describe('the WHERE picker — location tags, and the DIVERGENCE from Requires (
     TASKS = [task('a', 'Alpha', { locationIds: ['g'] })];
     render(<App />);
     await openDetail('Alpha');
+    fireEvent.focus(whereSearch());
     fireEvent.change(whereSearch(), { target: { value: 'gar' } });
     expect(screen.queryByRole('button', { name: /Add location Garage/i })).toBeNull();
   });
@@ -721,6 +846,7 @@ describe('the WHERE picker — location tags, and the DIVERGENCE from Requires (
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.focus(whereSearch());
     fireEvent.change(whereSearch(), { target: { value: 'gar' } }); // matches 'Garage'
     expect(screen.getByRole('button', { name: /Add location Garage/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /and tag it/i })).toBeNull(); // NO Create on a match

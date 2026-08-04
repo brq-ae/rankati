@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] — 2026-08-04
+
+### Changed
+
+- **The pickers in a task now show their options the moment you tap them.** Choosing a list to move to, a task to depend on, or a place to tag used to stay blank until you typed — no help if you'd forgotten the name. Now each opens to the full list, sorted A–Z, and typing narrows it. The dependency picker shows up to 50 at once with a gentle "keep typing to narrow…" hint when there are more, and a stray Enter on an untouched box no longer selects anything.
+
 ## [0.35.0] — 2026-07-31
 
 ### Changed

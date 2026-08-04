@@ -577,31 +577,38 @@ export default function TaskDetail({
   const typed = query.trim();
 
   /**
-   * What this task could newly require, once you have typed something.
+   * What this task could newly require — BROWSE-FIRST (0089): focus the box and every eligible
+   * task drops down immediately, sorted A–Z; typing narrows it. You never have to remember a
+   * name to find something.
    *
-   * EMPTY QUERY → NOTHING. With a large task set, listing every candidate on an untouched box
-   * is a wall — and it shoves "+ Create" off-screen. The picker is type-to-narrow: results
-   * appear only once there is a query, and the list itself is height-capped and scrolls
-   * (below), so even a broad match cannot grow unbounded.
+   * The eligible set is CAPPED at 50 (alphabetical) in BOTH the browse-all and the filtered
+   * view; when more than 50 remain a faint "keep typing to narrow…" row stands in for the rest,
+   * so a large backlog never walls the panel or shoves "+ Create" off-screen. The cap guards any
+   * large match set, not merely the empty query.
    *
    * Self and already-linked are excluded because the client can know them alone. CYCLES ARE
    * NOT — that would be a second implementation of the rule the server enforces by walking
    * the graph, free to drift from it (0054). A looping pick is offered and refused with its
    * path, which is guided correction rather than a mystery.
    */
-  const matches =
-    typed === ''
-      ? []
-      : tasks
-          .filter((o) => o.id !== task.id && !task.dependsOn.includes(o.id))
-          .filter((o) => o.title.toLowerCase().includes(typed.toLowerCase()));
+  const DEP_CAP = 50;
+  const depEligible = tasks
+    .filter((o) => o.id !== task.id && !task.dependsOn.includes(o.id))
+    .filter((o) => typed === '' || o.title.toLowerCase().includes(typed.toLowerCase()))
+    .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+  const matches = depEligible.slice(0, DEP_CAP);
+  const depOverflow = depEligible.length > DEP_CAP;
 
   // The picker is an aria-activedescendant COMBOBOX: ↓/↑ move a highlight, Enter selects it, Esc
   // clears — focus stays in the input, so a screen reader announces the active option rather than
   // chasing focus down the list. Tap and Tab still work (the options are real buttons).
-  const [highlight, setHighlight] = useState(0);
-  useEffect(() => setHighlight(0), [query]); // a new query is a new match set → start at the top
-  const activeIdx = matches.length > 0 ? Math.min(highlight, matches.length - 1) : -1;
+  // depOpen drives the menu (browse-first, 0089): true on focus, false on blur/Escape.
+  const [depOpen, setDepOpen] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  // No option is pre-active on an empty (browse-all) query, so a stray Enter never silently adds a
+  // dependency; typing activates the first match, arrowing activates from the top (0089).
+  useEffect(() => setHighlight(query.trim() === '' ? -1 : 0), [query]);
+  const activeIdx = highlight >= 0 && highlight < matches.length ? highlight : -1;
   const activeOption = activeIdx >= 0 ? matches[activeIdx] : undefined;
   const optionId = (id: string) => `req-opt-${id}`;
   const selectMatch = (o: Task) => {
@@ -609,16 +616,23 @@ export default function TaskDetail({
     setQuery('');
   };
 
-  // The list move is a create-or-move combobox (v0.34.0), mirroring the dependency picker above: type
-  // to filter existing lists and pick one to MOVE to, or name a NEW list to create + move to in one
-  // action. A case-insensitive name match selects the existing list — never a duplicate.
+  // The list move is a create-or-move combobox (v0.34.0), mirroring the dependency picker above and
+  // now BROWSE-FIRST (0089): focus the box and every list drops down (incl. the current one, marked
+  // "(current)"), sorted A–Z; typing narrows. Pick one to MOVE to, or name a NEW list to create +
+  // move to in one action. A case-insensitive name match selects the existing list — never a
+  // duplicate. No cap — the list set is small and the box height-caps and scrolls.
   const [listQuery, setListQuery] = useState('');
-  const [listHighlight, setListHighlight] = useState(0);
-  useEffect(() => setListHighlight(0), [listQuery]);
+  const [listOpen, setListOpen] = useState(false);
+  const [listHighlight, setListHighlight] = useState(-1);
+  // No option is pre-active on an empty (browse-all) query, so a stray Enter never silently moves
+  // the task; typing activates the first match, arrowing activates from the top (0089).
+  useEffect(() => setListHighlight(listQuery.trim() === '' ? -1 : 0), [listQuery]);
   const listTyped = listQuery.trim();
-  const listMatches =
-    listTyped === '' ? [] : lists.filter((l) => l.name.toLowerCase().includes(listTyped.toLowerCase()));
-  const listActiveIdx = listMatches.length > 0 ? Math.min(listHighlight, listMatches.length - 1) : -1;
+  const listMatches = lists
+    .filter((l) => listTyped === '' || l.name.toLowerCase().includes(listTyped.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const listActiveIdx =
+    listHighlight >= 0 && listHighlight < listMatches.length ? listHighlight : -1;
   const listActiveOption = listActiveIdx >= 0 ? listMatches[listActiveIdx] : undefined;
   const listOptionId = (id: string) => `list-opt-${id}`;
   const currentListName = lists.find((l) => l.id === task.listId)?.name ?? '(unknown)';
@@ -635,17 +649,24 @@ export default function TaskDetail({
     setListQuery('');
   };
 
-  // The location picker (ADRs 0060, 0061), mirroring the dependency picker above but for CONTEXT.
+  // The location picker (ADRs 0060, 0061), now BROWSE-FIRST too (0089): focus the box and every
+  // location drops down, sorted A–Z; typing narrows. It stays deliberately MINIMAL — a plain input
+  // over a list of real, Tab-reachable <button>s, with NO listbox/option roles and NO arrow-key nav
+  // (a listbox role without arrow nav announces a listbox whose arrows do nothing — worse than none).
   const locName = (id: string) => locations.find((l) => l.id === id)?.name ?? '(deleted)';
+  const [locOpen, setLocOpen] = useState(false);
   const locTyped = locQuery.trim();
-  // ALL locations whose name contains the query, tagged or not — the CREATE-SUPPRESSION set: if
-  // any location matches, "+ Create" stays hidden even when the only match is already tagged (0061).
+  // ALL locations whose name matches the query, tagged or not — the CREATE-SUPPRESSION set: if any
+  // location matches, "+ Create" stays hidden even when the only match is already tagged (0061). On
+  // an empty (browse-all) query this is every location, but "+ Create" is gated on locTyped anyway.
   const locMatching =
     locTyped === ''
-      ? []
+      ? locations
       : locations.filter((l) => l.name.toLowerCase().includes(locTyped.toLowerCase()));
-  // The clickable suggestions: the matches not already on this task.
-  const locSuggestions = locMatching.filter((l) => !task.locationIds.includes(l.id));
+  // The clickable suggestions: the matches not already on this task, sorted A–Z. No cap — few places.
+  const locSuggestions = locMatching
+    .filter((l) => !task.locationIds.includes(l.id))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   return (
     <dialog
@@ -744,36 +765,43 @@ export default function TaskDetail({
           <input
             value={listQuery}
             onChange={(e) => setListQuery(e.target.value)}
+            onFocus={() => setListOpen(true)}
+            onBlur={() => setListOpen(false)}
             onKeyDown={(e) => {
-              if (listMatches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+              if (e.key === 'Escape') {
+                e.preventDefault(); // close the popup first (don't also close the modal)
+                setListOpen(false);
+                setListQuery('');
+                return;
+              }
+              if (listOpen && listMatches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
                 setListHighlight((h) =>
                   e.key === 'ArrowDown' ? Math.min(h + 1, listMatches.length - 1) : Math.max(h - 1, 0),
                 );
               } else if (e.key === 'Enter') {
                 e.preventDefault();
-                if (listActiveOption) moveToList(listActiveOption.id);
+                if (listOpen && listActiveOption) moveToList(listActiveOption.id);
                 else if (listTyped) createOrMoveList();
-              } else if (e.key === 'Escape') {
-                e.preventDefault(); // close the popup first (don't also close the modal)
-                setListQuery('');
               }
             }}
             role="combobox"
-            aria-expanded={listMatches.length > 0}
+            aria-expanded={listOpen && listMatches.length > 0}
             aria-controls="list-move-listbox"
             aria-autocomplete="list"
-            aria-activedescendant={listActiveOption ? listOptionId(listActiveOption.id) : undefined}
+            aria-activedescendant={listOpen && listActiveOption ? listOptionId(listActiveOption.id) : undefined}
             aria-label="Move to a list"
-            placeholder="Type to search, or name a new list…"
+            placeholder="Search lists, or name a new one…"
             className="rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
           />
-          {listMatches.length > 0 && (
+          {listOpen && listMatches.length > 0 && (
             <ul id="list-move-listbox" role="listbox" className="flex max-h-48 flex-col gap-1 overflow-y-auto">
               {listMatches.map((l, i) => (
                 <li key={l.id} role="option" id={listOptionId(l.id)} aria-selected={i === listActiveIdx}>
                   <button
                     type="button"
+                    // Keep focus on the input through the tap so onClick lands before onBlur closes it.
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => moveToList(l.id)}
                     onMouseMove={() => setListHighlight(i)}
                     aria-label={`Move to ${l.name}`}
@@ -1035,8 +1063,9 @@ export default function TaskDetail({
             </ul>
           )}
 
-          {/* Type-to-search as an aria-activedescendant combobox — ↓/↑ highlight, Enter select,
-              Esc clear. Focus never leaves the input, so the screen reader hears the active option. */}
+          {/* Browse-first (0089) aria-activedescendant combobox — focus drops all eligible options
+              (A–Z), typing narrows; ↓/↑ highlight, Enter select, Esc close. Focus never leaves the
+              input, so the screen reader hears the active option. */}
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-xs font-medium text-muted">
               Add something this requires
@@ -1044,8 +1073,16 @@ export default function TaskDetail({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setDepOpen(true)}
+              onBlur={() => setDepOpen(false)}
               onKeyDown={(e) => {
-                if (matches.length === 0) return; // no popup → let Tab/Esc do their normal thing
+                if (e.key === 'Escape') {
+                  e.preventDefault(); // close the popup first (don't also close the modal)
+                  setDepOpen(false);
+                  setQuery('');
+                  return;
+                }
+                if (!depOpen || matches.length === 0) return; // no popup → let Tab do its normal thing
                 if (e.key === 'ArrowDown') {
                   e.preventDefault();
                   setHighlight((h) => Math.min(h + 1, matches.length - 1));
@@ -1055,29 +1092,30 @@ export default function TaskDetail({
                 } else if (e.key === 'Enter' && activeOption) {
                   e.preventDefault();
                   selectMatch(activeOption);
-                } else if (e.key === 'Escape') {
-                  e.preventDefault(); // close the popup first (don't also close the modal)
-                  setQuery('');
                 }
               }}
               role="combobox"
-              aria-expanded={matches.length > 0}
+              aria-expanded={depOpen && matches.length > 0}
               aria-controls="requires-listbox"
               aria-autocomplete="list"
-              aria-activedescendant={activeOption ? optionId(activeOption.id) : undefined}
-              placeholder="Type to search, or name something new…"
+              aria-activedescendant={depOpen && activeOption ? optionId(activeOption.id) : undefined}
+              placeholder="Search tasks, or name something new…"
               className="rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
             />
           </label>
 
-          {matches.length > 0 && (
-            // Height-capped and scrollable: ~5–6 rows show, the rest scroll inside, so a broad
-            // match never walls the panel or pushes "+ Create" out of reach.
+          {depOpen && matches.length > 0 && (
+            // Height-capped and scrollable: ~5–6 rows show, the rest scroll inside. The eligible set
+            // is already capped at 50 (browse-all or filtered); past that the hint row below stands
+            // in for the remainder, so the box never walls the panel or pushes "+ Create" away.
             <ul id="requires-listbox" role="listbox" className="flex max-h-48 flex-col gap-1 overflow-y-auto">
               {matches.map((o, i) => (
                 <li key={o.id} role="option" id={optionId(o.id)} aria-selected={i === activeIdx}>
                   <button
                     type="button"
+                    // Keep focus on the input through the tap so onClick lands before onBlur closes
+                    // the menu (the focus/blur-vs-tap race).
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => selectMatch(o)}
                     onMouseMove={() => setHighlight(i)}
                     aria-label={`Require ${o.title}`}
@@ -1089,6 +1127,12 @@ export default function TaskDetail({
                   </button>
                 </li>
               ))}
+              {depOverflow && (
+                // Not an option (aria-hidden): a hint that the list is truncated at 50, not a pick.
+                <li aria-hidden="true" className="px-2 py-1 text-xs italic text-faint">
+                  keep typing to narrow…
+                </li>
+              )}
             </ul>
           )}
 
@@ -1161,17 +1205,30 @@ export default function TaskDetail({
             <input
               value={locQuery}
               onChange={(e) => setLocQuery(e.target.value)}
-              placeholder="Type to search places…"
+              onFocus={() => setLocOpen(true)}
+              onBlur={() => setLocOpen(false)}
+              onKeyDown={(e) => {
+                // Escape closes the popup (not the modal); there is no arrow-nav/Enter-select here,
+                // so Enter is a plain no-op — trivially empty-safe, no stray tag can be added.
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setLocOpen(false);
+                  setLocQuery('');
+                }
+              }}
+              placeholder="Search places…"
               className="rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
             />
           </label>
 
-          {locSuggestions.length > 0 && (
+          {locOpen && locSuggestions.length > 0 && (
             <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
               {locSuggestions.map((l) => (
                 <li key={l.id}>
                   <button
                     type="button"
+                    // Keep focus on the input through the tap so onClick lands before onBlur closes it.
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       // locationIds is a full-set replace (0060) — append then send the whole set.
                       onSetLocations(task.id, [...task.locationIds, l.id]);

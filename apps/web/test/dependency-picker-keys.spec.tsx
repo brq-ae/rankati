@@ -74,6 +74,7 @@ describe('Requires picker — combobox keyboard nav (v0.18)', () => {
 
   it('↓/↑ move aria-activedescendant across role=option matches; Enter selects the highlighted one', () => {
     const onSetDependsOn = renderDetail();
+    fireEvent.focus(combobox()); // browse-first (0089): focus opens the menu
     fireEvent.change(combobox(), { target: { value: 'task' } }); // matches Alpha/Beta/Gamma task
 
     // Three real options in the picker's listbox, exposed to assistive tech.
@@ -98,6 +99,7 @@ describe('Requires picker — combobox keyboard nav (v0.18)', () => {
 
   it('↓ clamps at the last option; Enter on the first selects it', () => {
     const onSetDependsOn = renderDetail();
+    fireEvent.focus(combobox()); // browse-first (0089): focus opens the menu
     fireEvent.change(combobox(), { target: { value: 'task' } });
     // Down past the end stays on the last.
     for (let i = 0; i < 5; i++) fireEvent.keyDown(combobox(), { key: 'ArrowDown' });
