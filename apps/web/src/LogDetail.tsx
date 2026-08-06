@@ -38,6 +38,7 @@ export default function LogDetail({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [log, setLog] = useState<Log | null>(null);
   const [name, setName] = useState('');
+  const [pastDay, setPastDay] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -80,6 +81,17 @@ export default function LogDetail({
         })
         .catch((e: Error) => setError(e.message));
     }
+  };
+
+  // Backdate a forgotten occurrence. The cap is "not future" (today is allowed — idempotent with
+  // "Did it today"), enforced CLIENT-side only: `on` is the client's local today, the server stays
+  // tz-agnostic (ADR 0052). No min, so a new log can seed past history too. `did` is idempotent per
+  // day (0087), so re-logging an existing day is a harmless no-op. String compare is safe for YMD.
+  const canLogPast = pastDay !== '' && pastDay <= on;
+  const onLogPast = async () => {
+    if (!canLogPast) return;
+    await act(logDid(id, pastDay)); // reuse the act→load() reload: stats recompute against the real `on`
+    setPastDay('');
   };
 
   const entries = log?.entries ?? [];
@@ -134,6 +146,33 @@ export default function LogDetail({
                 className="touch-manipulation rounded-sm px-2 py-1.5 text-xs text-faint hover:text-danger"
               >
                 Delete log
+              </button>
+            </div>
+
+            {/* Forgot a day? — backdate an occurrence via the same idempotent did(id, on) endpoint
+                (0087). Secondary to "Did it today" so there is one primary. Capped at today (max), no
+                min so a new log can seed past history. */}
+            <div className="flex items-center gap-2">
+              <label htmlFor="log-past-day" className="shrink-0 text-xs font-medium text-muted">
+                Forgot a day?
+              </label>
+              <input
+                id="log-past-day"
+                type="date"
+                value={pastDay}
+                max={on}
+                onChange={(e) => setPastDay(e.target.value)}
+                aria-label="Log a past day"
+                className="min-w-0 flex-1 touch-manipulation rounded-xl border border-field bg-control-bg px-2 py-1 text-sm outline-none focus:border-primary"
+              />
+              <button
+                type="button"
+                onClick={() => void onLogPast()}
+                disabled={!canLogPast}
+                aria-label="Log the chosen past day"
+                className="touch-manipulation shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium text-strong ring-1 ring-field hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Log
               </button>
             </div>
 

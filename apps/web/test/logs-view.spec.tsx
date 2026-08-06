@@ -111,6 +111,62 @@ describe('LogDetail — the on-open reveal (ADR 0087)', () => {
     expect(api.logUndo).toHaveBeenCalledWith('l1', 'e2', ON);
   });
 
+  it('backdates a forgotten day: picking a past date + Log calls logDid with THAT date, and it appears in History', async () => {
+    open(log({ stats: { lastDoneOn: '2026-03-08', count: 1, averageGapDays: null, currentGapDays: 12 }, entries: [entry('e1', '2026-03-08')] }));
+    await screen.findByText('8 Mar 2026');
+    expect(screen.queryByText('2 Mar 2026')).toBeNull(); // not there yet
+
+    // The reload (act→load→getLog) re-fetches with the real `on`; mock it to return the updated set.
+    vi.mocked(api.logDid).mockResolvedValue(log({ stats: { lastDoneOn: '2026-03-08', count: 2, averageGapDays: 6, currentGapDays: 12 }, entries: [entry('e1', '2026-03-08'), entry('e2', '2026-03-02')] }));
+    vi.mocked(api.getLog).mockResolvedValue(log({ stats: { lastDoneOn: '2026-03-08', count: 2, averageGapDays: 6, currentGapDays: 12 }, entries: [entry('e1', '2026-03-08'), entry('e2', '2026-03-02')] }));
+
+    fireEvent.change(screen.getByLabelText('Log a past day'), { target: { value: '2026-03-02' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Log the chosen past day' }));
+    expect(api.logDid).toHaveBeenCalledWith('l1', '2026-03-02'); // that day, not `on`
+
+    // History bumps to 2 and the new day shows, newest-first (below the existing 8 Mar).
+    await screen.findByText('2 Mar 2026');
+    expect(screen.getByText('History · 2')).toBeTruthy();
+    const dates = screen.getAllByText(/2026$/).map((n) => n.textContent);
+    expect(dates).toEqual(['8 Mar 2026', '2 Mar 2026']); // sorted newest-first by the server
+  });
+
+  it('the Log button is disabled until a valid (non-future) date is picked', async () => {
+    open(log({ stats: { lastDoneOn: null, count: 0, averageGapDays: null, currentGapDays: null }, entries: [] }));
+    await screen.findByText('Not logged yet.');
+    const button = () => screen.getByRole('button', { name: 'Log the chosen past day' }) as HTMLButtonElement;
+    const input = () => screen.getByLabelText('Log a past day');
+
+    expect(button().disabled).toBe(true); // empty → disabled
+    expect(input().getAttribute('max')).toBe(ON); // today is the cap
+
+    // A FUTURE date (> on) keeps it disabled — the canLogPast JS guard is the real enforcement.
+    fireEvent.change(input(), { target: { value: '2026-03-25' } }); // ON is 2026-03-20
+    expect(button().disabled).toBe(true);
+
+    // A past date enables it.
+    fireEvent.change(input(), { target: { value: '2026-03-10' } });
+    expect(button().disabled).toBe(false);
+  });
+
+  it('re-logging a day already in history is a harmless no-op — no error, no duplicate', async () => {
+    open(log({ stats: { lastDoneOn: '2026-03-08', count: 1, averageGapDays: null, currentGapDays: 12 }, entries: [entry('e1', '2026-03-08')] }));
+    await screen.findByText('8 Mar 2026');
+
+    // Idempotent: the endpoint upserts, the reload returns the SAME single entry.
+    const same = log({ stats: { lastDoneOn: '2026-03-08', count: 1, averageGapDays: null, currentGapDays: 12 }, entries: [entry('e1', '2026-03-08')] });
+    vi.mocked(api.logDid).mockResolvedValue(same);
+    vi.mocked(api.getLog).mockResolvedValue(same);
+
+    fireEvent.change(screen.getByLabelText('Log a past day'), { target: { value: '2026-03-08' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Log the chosen past day' }));
+    expect(api.logDid).toHaveBeenCalledWith('l1', '2026-03-08');
+
+    await waitFor(() => expect(screen.getByText('History · 1')).toBeTruthy());
+    expect(screen.getAllByText('8 Mar 2026')).toHaveLength(1); // still once, not duplicated
+    expect(screen.queryByRole('alert')).toBeNull(); // no "already logged" error
+  });
+
   it('renames on blur and deletes with a confirm', async () => {
     open(log({ name: 'Haircut', stats: { lastDoneOn: null, count: 0, averageGapDays: null, currentGapDays: null }, entries: [] }));
     const input = (await screen.findByLabelText('Log name')) as HTMLInputElement;
