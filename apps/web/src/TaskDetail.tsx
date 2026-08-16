@@ -10,6 +10,7 @@ import type {
   UpdateChecklistItemDto,
 } from '@rankati/shared';
 import { useEffect, useRef, useState } from 'react';
+import ListPickerField from './ListPickerField';
 import { EFFORTS, type Thresholds, bucketLabel } from './effort-prefs';
 import { isGated, isWindowOpen, localDay, localTime } from './local-day';
 import { TIERS, tierOf } from './tiers';
@@ -99,6 +100,8 @@ interface TaskDetailProps {
   lists: List[];
   onClose: () => void;
   onRename: (id: string, title: string) => void;
+  /** Set the inert free-text notes (ADR 0090) — commit-on-blur; '' clears (server → null). */
+  onSetNotes: (id: string, value: string) => void;
   /** Move the task to another list — changes only its listId (ADR 0056 follow-on). */
   onSetList: (id: string, listId: string) => void;
   onSetNotBefore: (id: string, value: string) => void;
@@ -176,6 +179,7 @@ export default function TaskDetail({
   onSetNeedsDetails,
   onClose,
   onRename,
+  onSetNotes,
   onSetList,
   onSetNotBefore,
   onSetDue,
@@ -202,6 +206,7 @@ export default function TaskDetail({
   // this modal re-mounts on the new id (a fresh instance, fresh ref).
   const creatingRef = useRef(false);
   const [draftTitle, setDraftTitle] = useState(task?.title ?? '');
+  const [draftNotes, setDraftNotes] = useState(task?.notes ?? '');
   /**
    * The picker's state is modal-local: nothing outside needs it, and it resets when the
    * modal closes — a stale query waiting on reopen would be wrong.
@@ -532,6 +537,12 @@ export default function TaskDetail({
       ? null
       : isWindowOpen(task.availabilityWindow, localDay(), localTime());
 
+  // Commit notes on blur only (newlines are content, so no Enter-to-submit). Guarded against a no-op:
+  // an unchanged blur must NOT PATCH, because any notes write clears needsDetails (0073/0090). The
+  // server trims and turns an empty string into null, so '' vs a stored null are the same edit.
+  const commitNotes = () => {
+    if (draftNotes !== (task.notes ?? '')) onSetNotes(task.id, draftNotes);
+  };
   const commitTitle = () => {
     if (draftTitle.trim() && draftTitle !== task.title) onRename(task.id, draftTitle);
   };
@@ -621,32 +632,12 @@ export default function TaskDetail({
   // "(current)"), sorted A–Z; typing narrows. Pick one to MOVE to, or name a NEW list to create +
   // move to in one action. A case-insensitive name match selects the existing list — never a
   // duplicate. No cap — the list set is small and the box height-caps and scrolls.
-  const [listQuery, setListQuery] = useState('');
-  const [listOpen, setListOpen] = useState(false);
-  const [listHighlight, setListHighlight] = useState(-1);
-  // No option is pre-active on an empty (browse-all) query, so a stray Enter never silently moves
-  // the task; typing activates the first match, arrowing activates from the top (0089).
-  useEffect(() => setListHighlight(listQuery.trim() === '' ? -1 : 0), [listQuery]);
-  const listTyped = listQuery.trim();
-  const listMatches = lists
-    .filter((l) => listTyped === '' || l.name.toLowerCase().includes(listTyped.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  const listActiveIdx =
-    listHighlight >= 0 && listHighlight < listMatches.length ? listHighlight : -1;
-  const listActiveOption = listActiveIdx >= 0 ? listMatches[listActiveIdx] : undefined;
-  const listOptionId = (id: string) => `list-opt-${id}`;
+  // The browse-first combobox itself is the shared ListPickerField (0089); this keeps only the
+  // "currently in" label and the two domain actions it drives. moveToList no-ops a pick of the
+  // current list; a new name creates it and moves in one action (v0.34.0).
   const currentListName = lists.find((l) => l.id === task.listId)?.name ?? '(unknown)';
-  const listExactMatch = (name: string) => lists.find((l) => l.name.toLowerCase() === name.toLowerCase());
   const moveToList = (listId: string) => {
     if (listId !== task.listId) onSetList(task.id, listId);
-    setListQuery('');
-  };
-  const createOrMoveList = () => {
-    if (!listTyped) return; // reject empty/whitespace
-    const existing = listExactMatch(listTyped);
-    if (existing) moveToList(existing.id); // case-insensitive match → select, no duplicate
-    else onCreateListAndMove(task.id, listTyped); // new name → create + move
-    setListQuery('');
   };
 
   // The location picker (ADRs 0060, 0061), now BROWSE-FIRST too (0089): focus the box and every
@@ -762,74 +753,19 @@ export default function TaskDetail({
             dependency that crosses lists survives because the link is between task ids. */}
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted">List — currently “{currentListName}”</span>
-          <input
-            value={listQuery}
-            onChange={(e) => setListQuery(e.target.value)}
-            onFocus={() => setListOpen(true)}
-            onBlur={() => setListOpen(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.preventDefault(); // close the popup first (don't also close the modal)
-                setListOpen(false);
-                setListQuery('');
-                return;
-              }
-              if (listOpen && listMatches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-                e.preventDefault();
-                setListHighlight((h) =>
-                  e.key === 'ArrowDown' ? Math.min(h + 1, listMatches.length - 1) : Math.max(h - 1, 0),
-                );
-              } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (listOpen && listActiveOption) moveToList(listActiveOption.id);
-                else if (listTyped) createOrMoveList();
-              }
-            }}
-            role="combobox"
-            aria-expanded={listOpen && listMatches.length > 0}
-            aria-controls="list-move-listbox"
-            aria-autocomplete="list"
-            aria-activedescendant={listOpen && listActiveOption ? listOptionId(listActiveOption.id) : undefined}
-            aria-label="Move to a list"
+          <ListPickerField
+            lists={lists}
+            currentListId={task.listId}
+            onPick={moveToList}
+            onCreateAndPick={(name) => onCreateListAndMove(task.id, name)}
+            inputAriaLabel="Move to a list"
             placeholder="Search lists, or name a new one…"
-            className="rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+            pickLabel={(name) => `Move to ${name}`}
+            createAriaLabel={(name) => `Create ${name} and move here`}
+            renderCreateLabel={(name) => <>+ Create “{name}” &amp; move</>}
+            listboxId="list-move-listbox"
+            optionIdPrefix="list-opt-"
           />
-          {listOpen && listMatches.length > 0 && (
-            <ul id="list-move-listbox" role="listbox" className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-              {listMatches.map((l, i) => (
-                <li key={l.id} role="option" id={listOptionId(l.id)} aria-selected={i === listActiveIdx}>
-                  <button
-                    type="button"
-                    // Keep focus on the input through the tap so onClick lands before onBlur closes it.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => moveToList(l.id)}
-                    onMouseMove={() => setListHighlight(i)}
-                    aria-label={`Move to ${l.name}`}
-                    className={`w-full truncate rounded-xl px-2 py-1 text-left text-sm text-strong ${
-                      i === listActiveIdx ? 'bg-hover' : 'hover:bg-hover'
-                    }`}
-                  >
-                    {l.name}
-                    {l.id === task.listId ? ' (current)' : ''}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {/* Create-or-move: offered when text is typed AND no case-insensitive exact match exists (an
-              exact match is pickable from the list above, so creating would duplicate it). */}
-          {listTyped !== '' && !listExactMatch(listTyped) && (
-            <div className="mt-1 border-t border-divider pt-2">
-              <button
-                type="button"
-                onClick={createOrMoveList}
-                aria-label={`Create ${listTyped} and move here`}
-                className="touch-manipulation rounded-xl bg-primary px-2 py-1 text-xs font-medium text-on-primary"
-              >
-                + Create “{listTyped}” &amp; move
-              </button>
-            </div>
-          )}
         </div>
 
         {/* The badge sits OUTSIDE the <label>. Inside, its text joins the input's
@@ -1369,6 +1305,22 @@ export default function TaskDetail({
             </button>
           </div>
         </div>
+
+        {/* Notes (ADR 0090) — free-text, INERT: shown and edited here, never read by the engine. A
+            promoted idea's body lands here (convert copies it). Commit on blur only; newlines are
+            content, so there is no Enter-to-submit. An empty box clears the notes (server → null). */}
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted">Notes</span>
+          <textarea
+            value={draftNotes}
+            onChange={(e) => setDraftNotes(e.target.value)}
+            onBlur={commitNotes}
+            rows={3}
+            aria-label="Notes"
+            placeholder="Anything worth remembering…"
+            className="touch-manipulation resize-y rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+          />
+        </label>
       </div>
     </dialog>
   );

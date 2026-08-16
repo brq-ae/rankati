@@ -10,6 +10,9 @@ import type {
   Log,
   CreateLogDto,
   UpdateLogDto,
+  Idea,
+  CreateIdeaDto,
+  UpdateIdeaDto,
   MergeLocationsDto,
   NextPairResult,
   PinDays,
@@ -307,6 +310,26 @@ export const logUndo = (id: string, entryId: string, on: string): Promise<Log> =
   request<Log>(`/api/logs/${id}/entries/${encodeURIComponent(entryId)}?on=${encodeURIComponent(on)}`, {
     method: 'DELETE',
   });
+
+// ── Ideas (ADR 0090) — a pre-decision capture space, outside the engine (the Logs pattern). List is
+// newest-first (server-ordered); convert promotes an idea into a Task in a list the owner picks and
+// returns the created Task. No `on` — an idea has no day-relative state. ────────────────────────────
+export const getIdeas = (): Promise<Idea[]> => request<Idea[]>('/api/ideas');
+
+export const createIdea = (dto: CreateIdeaDto): Promise<Idea> =>
+  request<Idea>('/api/ideas', { method: 'POST', body: JSON.stringify(dto) });
+
+export const updateIdea = (id: string, dto: UpdateIdeaDto): Promise<Idea> =>
+  request<Idea>(`/api/ideas/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
+
+export const deleteIdea = async (id: string): Promise<void> => {
+  const res = await fetch(`/api/ideas/${id}`, { method: 'DELETE' });
+  ensureOk(res);
+};
+
+/** Promote an idea to a task in the PICKED list (ADR 0090) — returns the created Task; the idea is deleted. */
+export const convertIdeaToTask = (id: string, listId: string): Promise<Task> =>
+  request<Task>(`/api/ideas/${id}/convert`, { method: 'POST', body: JSON.stringify({ listId }) });
 
 // ── Auth (ADR 0076) — the front door. status routes the app; setup/login open a session (the server
 // sets the cookie); logout revokes it. login is raw (not `request`) so the caller sees the 401/429

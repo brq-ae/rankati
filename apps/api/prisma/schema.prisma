@@ -203,6 +203,13 @@ model Task {
   /// permanently; nothing auto-resets `done`. Ordered by `position`.
   checklist ChecklistItem[]
 
+  /// Free-text notes (ADR 0090) — INERT display/data only, the one bounded stretch of 0001's minimalism.
+  /// Treated exactly like `title`: stored and shown, NEVER read by ranking, any gate, Today/Upcoming, or
+  /// the Arena. Its home is a promoted idea's body (convert copies it here); any task may carry one. NULL =
+  /// no notes — every existing row, since it defaults to nothing. A plain nullable String, no date/enum
+  /// discipline; internal newlines are preserved.
+  notes String?
+
   @@index([ownerId])
   @@index([listId])
   /// Fair pairing draws the least-dueled active tasks first (0004).
@@ -508,4 +515,24 @@ model LogEntry {
 
   @@unique([logId, doneOn])
   @@index([logId])
+}
+
+/// An Idea (ADR 0090) — a pre-decision capture, wholly OUTSIDE the engine like a Log (0087): never ranked,
+/// gated, dealt to Today, or in the Arena. A title plus an optional `body` for the later elaboration. A
+/// sibling entity, deliberately NOT a flag on Task — a flagged task is still a task the engine can rank.
+/// No relations, no children: promotion COPIES the fields into a new Task and deletes the idea (0090), so
+/// there is nothing to cascade. Listed newest-first by the service.
+model Idea {
+  id      String @id @default(uuid())
+  title   String
+  /// The later elaboration, or NULL. A plain nullable String; internal newlines preserved.
+  body    String?
+  /// Single local owner until auth exists (ADRs 0026, 0039).
+  ownerId String @default("local")
+
+  createdAt DateTime @default(now())
+  /// Bumped on every edit (title/body) — Logs have no such field; for ideas, freshness matters.
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
 }

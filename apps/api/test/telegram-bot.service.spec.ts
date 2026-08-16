@@ -62,6 +62,7 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   let captureResult: CaptureResult;
   let captureCalls: string[];
   let captureThrows: boolean;
+  let ideaCaptureCalls: string[];
   let refileResult: RefileResult;
   let refileCalls: { taskId: string; listId: string }[];
   let discardResult: DiscardResult;
@@ -138,6 +139,10 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
       if (captureThrows) throw new Error('boom');
       return captureResult;
     },
+    captureIdea: async (text: string) => {
+      ideaCaptureCalls.push(text);
+      return { title: text.trim(), truncated: false };
+    },
     refile: async (taskId: string, listId: string) => {
       refileCalls.push({ taskId, listId });
       return refileResult;
@@ -190,9 +195,10 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     binding = { boundChatId: null, linkCode: null };
     bindOutcome = 'bad-code';
     bindCalls = [];
-    captureResult = { task: aTask('x'), inboxName: 'Inbox', truncated: false, refileLists: [], overflow: 0 };
+    captureResult = { task: aTask('x'), inboxName: 'Inbox', truncated: false, refileLists: [], overflow: 0, ideaCount: 1 };
     captureCalls = [];
     captureThrows = false;
+    ideaCaptureCalls = [];
     refileResult = { status: 'moved', listName: 'Work' };
     refileCalls = [];
     discardResult = { status: 'discarded', title: 'X' };
@@ -381,6 +387,7 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
         { id: 'l3', name: 'Errands' },
       ] as unknown as CaptureResult['refileLists'],
       overflow: 0,
+      ideaCount: 1,
     };
     const bot = await startedBot();
     const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy milk' }));
@@ -411,6 +418,56 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     const bot = await startedBot();
     const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: 'boom' }));
     expect(rec.replies[0].text).toContain('went wrong');
+  });
+
+  it('a LEADING # captures an IDEA (not a task): strips the # and one space, confirms with the title', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: '# a standing desk' }));
+    expect(ideaCaptureCalls).toEqual(['a standing desk']); // # + one space stripped
+    expect(captureCalls).toEqual([]); // NOT captured as a task
+    expect(rec.replies[0].text).toBe('💡 Saved as idea: a standing desk');
+  });
+
+  it('a # that is NOT leading stays a normal task capture (buy #10 screws)', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy #10 screws' }));
+    expect(captureCalls).toEqual(['buy #10 screws']); // a task
+    expect(ideaCaptureCalls).toEqual([]); // NOT an idea
+  });
+
+  it('/idea <text> captures an idea and teaches the # shortcut; /idea alone hints and saves nothing', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.commandHandlers.idea, makeCtx(42, { match: 'buy a plant' }));
+    expect(ideaCaptureCalls).toEqual(['buy a plant']);
+    expect(rec.replies[0].text).toBe('Saved 💡 — tip: next time just start with #');
+    ideaCaptureCalls = [];
+    const { rec: rec2 } = await fireCtx(bot.commandHandlers.idea, makeCtx(42, { match: '   ' }));
+    expect(ideaCaptureCalls).toEqual([]);
+    expect(rec2.replies[0].text).toContain('/idea');
+  });
+
+  it('/idea from an UNBOUND chat is turned away as not linked — no idea created', async () => {
+    binding = { boundChatId: null, linkCode: '123456' };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.commandHandlers.idea, makeCtx(99, { match: 'a thought' }));
+    expect(ideaCaptureCalls).toEqual([]);
+    expect(rec.replies[0].text).toMatch(/link/i); // NOT_LINKED
+  });
+
+  it('the "#" tip footer shows on a normal capture ONLY while there are zero ideas', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+
+    captureResult = { ...captureResult, ideaCount: 0 };
+    const { rec: zero } = await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy milk' }));
+    expect(zero.replies[0].text).toContain('start with # to save as an idea');
+
+    captureResult = { ...captureResult, ideaCount: 3 };
+    const { rec: some } = await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy bread' }));
+    expect(some.replies[0].text).not.toContain('start with #');
   });
 
   it('a re-file callback from the bound chat moves the task and edits the message', async () => {

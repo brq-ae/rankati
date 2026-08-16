@@ -121,6 +121,19 @@ function parseImpact(value: unknown): Impact {
 }
 
 /**
+ * Free-text notes (ADR 0090) → their stored form — INERT, the same tri-state/trim as `Idea.body`: null or
+ * an empty/whitespace-only string clears to null, a string sets (trimmed of OUTER whitespace, internal
+ * newlines preserved). A non-string, non-null value is the caller's bug (400). This value is never read by
+ * any ranking/gate/Today/Arena query — it only ever writes.
+ */
+function parseNotes(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') throw new BadRequestException('notes must be a string or null');
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
  * The client's local TIME of day, validated — the second half of the clock context (0070).
  * Zero-padded 24h is strict for the same reason `on` is: the window check compares 'HH:MM'
  * strings, and only the zero-padded form compares chronologically ('9:30' sorts AFTER
@@ -752,6 +765,14 @@ export class TasksService {
       data.needsDetails = dto.needsDetails;
     }
 
+    if ('notes' in dto) {
+      // Free-text notes (ADR 0090) — INERT display/data, the 0090 tri-state/trim: null or an
+      // empty/whitespace string clears to null, a string sets (trimmed outer, internal newlines kept).
+      // Being a real field edit, it clears needsDetails via the rule below (nothing special here) — and
+      // it is NEVER read by any ranking/gate/Today/Arena query; it only ever writes.
+      data.notes = parseNotes(dto.notes);
+    }
+
     // Dependencies are not a column, so they are not part of `data` — they are rows in a
     // join table, replaced in the same transaction below.
     let nextDependencies: string[] | null = null;
@@ -775,7 +796,7 @@ export class TasksService {
     // say — look exactly like a successful edit.
     if (Object.keys(data).length === 0 && nextDependencies === null && nextLocations === null) {
       throw new BadRequestException(
-        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, or any combination',
+        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, or any combination',
       );
     }
 

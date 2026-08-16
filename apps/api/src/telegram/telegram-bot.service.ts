@@ -25,7 +25,11 @@ import {
   PIN_SNOOZE_TRIGGER,
   REFILE_TRIGGER,
 } from './telegram-callback';
-import { TelegramCaptureService, type CaptureResult } from './telegram-capture.service';
+import {
+  TelegramCaptureService,
+  type CaptureResult,
+  type IdeaCaptureResult,
+} from './telegram-capture.service';
 import { TelegramConfigService } from './telegram-config.service';
 import { TelegramReadService, type PinInfo } from './telegram-read.service';
 import type { LogSummary } from '../logs.service';
@@ -66,6 +70,7 @@ const COMMANDS = [
   { command: 'today', description: "Today's hand" },
   { command: 'now', description: 'The top card' },
   { command: 'add', description: 'Capture a task' },
+  { command: 'idea', description: 'Capture an idea' },
   { command: 'lists', description: 'Browse your lists' },
   { command: 'routines', description: 'Your reminders' },
   { command: 'logs', description: 'Your logs' },
@@ -171,7 +176,9 @@ export class TelegramBotService implements OnModuleDestroy {
           '👋 Welcome to Rankati. To connect this chat, open Settings → Telegram in the app and paste your link code here.',
         );
       } else if (chatId === boundChatId) {
-        await ctx.reply("👋 You're linked. Send me anything to capture it, or /help for the commands.");
+        await ctx.reply(
+          "👋 You're linked. Send me anything to capture it as a task — or start a message with # to save it as an idea. /help for the commands.",
+        );
       } else {
         await ctx.reply('This bot is already linked to another chat.');
       }
@@ -181,12 +188,12 @@ export class TelegramBotService implements OnModuleDestroy {
       await ctx.reply(
         [
           'Send me any message to capture it as a task.',
+          'Start a message with # to save it as an idea instead (or use /idea).',
           '',
           '/add <text> — capture a task',
+          '/idea <text> — capture an idea (or just start with #)',
           '/today — your hand for today',
           '/now — the top card',
-          '',
-          '(/today and /now arrive in the next update.)',
         ].join('\n'),
       );
     });
@@ -202,6 +209,19 @@ export class TelegramBotService implements OnModuleDestroy {
         return;
       }
       await this.captureAndReply(ctx, text);
+    });
+
+    bot.command('idea', async (ctx) => {
+      if (!(await this.isBoundChat(ctx))) {
+        await ctx.reply(NOT_LINKED);
+        return;
+      }
+      const text = (ctx.match ?? '').trim();
+      if (!text) {
+        await ctx.reply('Send /idea followed by the thought — e.g. “/idea a standing desk”. Or just start a message with #.');
+        return;
+      }
+      await this.captureIdeaAndReply(ctx, text, true); // teach the "#" shortcut on the /idea path
     });
 
     // /today — the fresh top-5 hand, each card with a ✓ Done button (Step 6). Served only to the linked chat.
@@ -470,7 +490,15 @@ export class TelegramBotService implements OnModuleDestroy {
       const { boundChatId } = await this.config.getBinding();
       if (boundChatId) {
         if (chatId === boundChatId) {
-          await this.captureAndReply(ctx, ctx.message?.text ?? '');
+          const raw = ctx.message?.text ?? '';
+          // A LEADING '#' captures an IDEA instead of a task (ADR 0090): strip the '#' and one optional
+          // following space; the rest is the title. Only a leading '#' triggers it — "buy #10 screws"
+          // stays a normal capture. No '#' → the existing Inbox capture + re-file flow, unchanged.
+          if (raw.trimStart().startsWith('#')) {
+            await this.captureIdeaAndReply(ctx, raw.trimStart().replace(/^#\s?/, ''), false);
+          } else {
+            await this.captureAndReply(ctx, raw);
+          }
         } else {
           await ctx.reply('This bot is linked to another chat.');
         }
@@ -515,9 +543,30 @@ export class TelegramBotService implements OnModuleDestroy {
     } else {
       lines.push(`It's in ${result.inboxName}. Make lists in the app to file captures from here.`);
     }
+    // Teach the "#" idea shortcut ONCE — only while the owner has no ideas yet, then it retires (0090).
+    if (result.ideaCount === 0) lines.push('💡 tip: start with # to save as an idea');
     await ctx.reply(lines.join('\n'), {
       reply_markup: this.captureKeyboard(result.task.id, result.refileLists),
     });
+  }
+
+  /** Capture text as an IDEA (ADR 0090) and confirm. `teach` picks the reply: the /idea path nudges toward
+   *  the faster '#' prefix; the '#' path (already used it) just confirms with the title. */
+  private async captureIdeaAndReply(ctx: TelegramContext, rawText: string, teach: boolean): Promise<void> {
+    const text = rawText.trim();
+    if (!text) {
+      await ctx.reply("There's nothing to save — send a few words after #, or /idea <text>.");
+      return;
+    }
+    let saved: IdeaCaptureResult;
+    try {
+      saved = await this.capture.captureIdea(text);
+    } catch (err) {
+      this.logError('idea capture failed', err);
+      await ctx.reply('Something went wrong saving that — please try again in a moment.');
+      return;
+    }
+    await ctx.reply(teach ? 'Saved 💡 — tip: next time just start with #' : `💡 Saved as idea: ${saved.title}`);
   }
 
   /** The capture keyboard: re-file list buttons (2 per row), then a 🗑 Discard button on its OWN row so it

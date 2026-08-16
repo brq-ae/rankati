@@ -5,6 +5,13 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] — 2026-08-16
+
+### Added
+
+- **Ideas — a place for thoughts that aren't tasks yet.** A new **Ideas** tab holds things you might do but haven't decided on: jot a title, add notes later, and it stays completely out of the way — never ranked, never dealt to Today. When you're ready, **Make it a task** and pick which list it lands in. Capture ideas from Telegram too: start a message with **#** (or use **/idea**) and it shows up here.
+- **Task notes.** Every task now has a free-text **Notes** field in its detail view — somewhere for context, links, or the details a promoted idea carried over. It's display-only: notes never affect ranking, gates, or what Today deals you.
+
 ## [0.37.0] — 2026-08-06
 
 ### Added

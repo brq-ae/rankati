@@ -26,6 +26,7 @@ import ThemeToggle from './ThemeToggle';
 import TodayView from './TodayView';
 import UpcomingView from './UpcomingView';
 import RoutinesTab from './RoutinesTab';
+import IdeasView from './IdeasView';
 import { useMode } from './mode';
 import { usePalette } from './palette';
 import { localDay, localTime, waitingBreakdown } from './local-day';
@@ -223,7 +224,7 @@ export default function App() {
    *
    * Opens on 'lists' — v0.3 ADDS a view, it does not move where the app starts.
    */
-  const [view, setView] = useState<'lists' | 'today' | 'upcoming' | 'routines'>('lists');
+  const [view, setView] = useState<'lists' | 'today' | 'upcoming' | 'routines' | 'ideas'>('lists');
   // Best-effort "current screen" for the error reporter's context (ADR 0078).
   useEffect(() => setCurrentView(view), [view]);
   /**
@@ -1055,6 +1056,18 @@ export default function App() {
     }
   }
 
+  // Inert free-text notes (ADR 0090) — a real field edit, so it clears needsDetails server-side; patch
+  // the one task in place with the returned row (no refresh — notes touches no gate/Today state).
+  async function onSetNotes(id: string, value: string): Promise<void> {
+    setError(null);
+    try {
+      const updated = await updateTask(id, { notes: value });
+      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function onDelete(id: string): Promise<void> {
     // Deleting a blocker unblocks its dependents — the backend cascades unconditionally
     // (0053), which is right, but it happens at a distance: a task can appear in Today
@@ -1286,12 +1299,12 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.37.0 — log a forgotten day</p>
+            <p className="text-sm text-muted">v0.38.0 — ideas</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
                 hidden on the Routines tab. */}
-            {view !== 'routines' && (
+            {view !== 'routines' && view !== 'ideas' && (
               <LocationFilter
                 locations={locations}
                 value={location}
@@ -1340,7 +1353,7 @@ export default function App() {
         {/* Three tabs. `aria-current` is what tells a screen reader which one you are on —
             colour alone says nothing to one. */}
         <nav className="mb-5 flex gap-1" aria-label="Views">
-          {(['lists', 'today', 'upcoming', 'routines'] as const).map((name) => (
+          {(['lists', 'today', 'upcoming', 'routines', 'ideas'] as const).map((name) => (
             <button
               key={name}
               type="button"
@@ -1390,6 +1403,8 @@ export default function App() {
           />
         ) : view === 'routines' ? (
           <RoutinesTab on={localDay()} />
+        ) : view === 'ideas' ? (
+          <IdeasView lists={lists} onPromoted={refresh} />
         ) : (
           <>
             {/* Committing a sitting reshuffles the ranking, so reload it in its new order. */}
@@ -1714,6 +1729,7 @@ export default function App() {
             lists={lists}
             onClose={closeDetail}
             onRename={onRename}
+            onSetNotes={onSetNotes}
             onSetList={onSetList}
             onSetNotBefore={onSetNotBefore}
             onSetDue={onSetDue}

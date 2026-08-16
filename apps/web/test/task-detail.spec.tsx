@@ -219,6 +219,43 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     });
   });
 
+  it('edits notes through PATCH /tasks/:id on blur, preserving internal newlines (ADR 0090)', async () => {
+    TASKS = [task('a', 'Alpha')];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const notes = within(document.querySelector('dialog')!).getByLabelText('Notes');
+    fireEvent.change(notes, { target: { value: 'ring the vet\nbring records' } });
+    fireEvent.blur(notes); // commit-on-blur only — no Enter (newlines are content)
+
+    expect(sent).toContainEqual({
+      url: '/api/tasks/a',
+      method: 'PATCH',
+      body: { notes: 'ring the vet\nbring records' },
+    });
+  });
+
+  it('clearing the notes box sends an empty string (the server turns it into null)', async () => {
+    TASKS = [task('a', 'Alpha', { notes: 'old note' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    const notes = within(document.querySelector('dialog')!).getByLabelText('Notes');
+    fireEvent.change(notes, { target: { value: '' } });
+    fireEvent.blur(notes);
+
+    expect(sent).toContainEqual({ url: '/api/tasks/a', method: 'PATCH', body: { notes: '' } });
+  });
+
+  it('a blur with NO change sends nothing — an unchanged notes box never PATCHes (guards needsDetails)', async () => {
+    TASKS = [task('a', 'Alpha', { notes: 'unchanged' })];
+    render(<App />);
+    await openDetail('Alpha');
+
+    fireEvent.blur(within(document.querySelector('dialog')!).getByLabelText('Notes')); // no edit
+    expect(sent.some((s) => s.url === '/api/tasks/a' && s.method === 'PATCH')).toBe(false);
+  });
+
   it('sets the date through the same PATCH, with the wire format untouched', async () => {
     TASKS = [task('a', 'Alpha')];
     render(<App />);

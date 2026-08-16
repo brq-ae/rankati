@@ -74,6 +74,7 @@ Capture and act on your tasks from Telegram, without opening the web app. It run
 Then, from your chat:
 
 - **Text the bot anything** (or `/add buy milk`) to capture it as a task in an **Inbox** list — with buttons to file it into another list or **🗑 discard** it.
+- **Start a message with `#`** (or use **`/idea`**) to save it as an **idea** instead — a thought that isn't a task yet. It lands in the Ideas tab in the app, out of the engine, until you promote it.
 - **`/today`** deals your top tasks and **`/now`** shows the top one, each with a **✓ Done** button.
 - Optionally enable a **daily digest** (a time + your timezone) to have today's tasks pushed to you each morning.
 - Your **most-neglected important task** leads `/today` and the digest as a ⚠️ **pin**, with **✓ Done** to complete it and **😴 Snooze** to hide it for a while — the same pin the web app shows, since its settings now live on the server.

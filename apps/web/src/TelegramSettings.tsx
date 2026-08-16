@@ -302,6 +302,12 @@ export default function TelegramSettings() {
               <span className="text-muted">Not linked — send the code from your Telegram chat.</span>
             )}
           </div>
+          {/* Capture hint (ADR 0090) — how to send tasks vs ideas from the chat. */}
+          <p className="text-xs text-faint">
+            Send any message to capture a task. Start a message with{' '}
+            <span className="font-medium">#</span> (or use <span className="font-medium">/idea</span>) to
+            save it as an idea instead.
+          </p>
         </div>
       )}
 

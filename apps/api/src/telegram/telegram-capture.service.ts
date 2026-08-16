@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { List, Task } from '@rankati/shared';
 import { LOCAL_OWNER_ID } from '../constants';
+import { IdeasService } from '../ideas.service';
 import { ListsService } from '../lists.service';
 import { PrismaService } from '../prisma.service';
 import { TasksService } from '../tasks.service';
@@ -21,6 +22,13 @@ export interface CaptureResult {
   truncated: boolean;
   refileLists: List[];
   overflow: number; // candidate lists beyond the button cap, not shown
+  ideaCount: number; // the owner's idea count — gates the teach-not-nag "#" footer (0090)
+}
+
+/** The result of a `#`/`/idea` capture (ADR 0090). */
+export interface IdeaCaptureResult {
+  title: string;
+  truncated: boolean;
 }
 
 export type RefileResult = { status: 'moved'; listName: string } | { status: 'stale' };
@@ -37,6 +45,7 @@ export class TelegramCaptureService {
     private readonly prisma: PrismaService,
     private readonly lists: ListsService,
     private readonly tasks: TasksService,
+    private readonly ideas: IdeasService,
   ) {}
 
   /** The owner's Inbox — found case-insensitively (it is shown/created as "Inbox"), or created plain. */
@@ -68,7 +77,21 @@ export class TelegramCaptureService {
       truncated,
       refileLists: shown,
       overflow: Math.max(0, total - shown.length),
+      ideaCount: await this.ideas.count(), // gates the "#" tip footer (0090)
     };
+  }
+
+  /**
+   * Capture free text as an Idea (ADR 0090), NOT a task — the `#` prefix / `/idea` path. Wholly outside the
+   * engine: it goes straight to IdeasService, never the Inbox and never the re-file flow. Same title cap as
+   * a task capture (over-long is truncated with an ellipsis). The caller has already stripped `#`//idea.
+   */
+  async captureIdea(rawText: string): Promise<IdeaCaptureResult> {
+    const trimmed = rawText.trim();
+    const truncated = trimmed.length > CAPTURE_TITLE_MAX;
+    const title = truncated ? `${trimmed.slice(0, CAPTURE_TITLE_MAX - 1).trimEnd()}…` : trimmed;
+    const idea = await this.ideas.create({ title });
+    return { title: idea.title, truncated };
   }
 
   /**

@@ -220,6 +220,13 @@ export interface Task {
    */
   checklist: ChecklistItem[];
   /**
+   * Free-text notes (ADR 0090) — INERT display/data only, a deliberate bounded stretch of 0001. Treated
+   * exactly like `title`: stored and shown, and NEVER read by ranking, any gate, Today/Upcoming, or the
+   * Arena. Its home is a promoted idea's `body` (convert copies it here), but any task may carry one. null =
+   * no notes. A plain string, no calendar/enum discipline; internal newlines are preserved.
+   */
+  notes: string | null;
+  /**
    * The deadline task whose urgency, propagated backward, drives THIS task's rank (ADR 0059).
    *
    * OPTIONAL because it is a property of a READ, not of a task: the same task carries it on the
@@ -405,6 +412,15 @@ export interface UpdateTaskDto {
    *              never collides with a field edit.
    */
   needsDetails?: boolean;
+  /**
+   * Free-text notes (ADR 0090) — inert, tri-state like the nullable fields above:
+   *   omitted -> leave the notes exactly as they are
+   *   value   -> set them (trimmed of OUTER whitespace, internal newlines preserved; an
+   *              empty/whitespace-only string clears to null)
+   *   null    -> clear them
+   * Editing notes is a real field edit, so it clears `needsDetails` (0073) like any other field.
+   */
+  notes?: string | null;
 }
 
 /**
@@ -722,4 +738,46 @@ export interface UpdateLogDto {
 /** POST /logs/:id/did — stamp today's occurrence; carries the client's local day (0052), idempotent per day. */
 export interface LogDidDto {
   on: string;
+}
+
+/**
+ * An Idea (ADR 0090) — a pre-decision capture, wholly OUTSIDE the engine like a Log (0087): never ranked,
+ * gated, dealt to Today, or in the Arena. A title, plus an optional `body` for the later elaboration.
+ * Owner-scoped; listed newest-first. Promote it to a real task with the convert endpoint (picks a list).
+ */
+export interface Idea {
+  id: string;
+  ownerId: string;
+  title: string;
+  /** The later elaboration, or null. A plain string, internal newlines preserved. */
+  body: string | null;
+  /** ISO 8601 — JSON has no Date. */
+  createdAt: string;
+  /** ISO 8601 — bumped on every edit (title/body). */
+  updatedAt: string;
+}
+
+/** POST /ideas — capture an Idea. `body` optional (the elaboration comes later). */
+export interface CreateIdeaDto {
+  title: string;
+  body?: string | null;
+}
+
+/**
+ * PATCH /ideas/:id — edit an Idea. Both optional; the same trim/tri-state as `UpdateTaskDto.notes` (0090):
+ * a string sets (trimmed outer, newlines kept; empty/whitespace `body` clears to null), null clears `body`.
+ * `title` is required non-empty when present (an idea always has a title).
+ */
+export interface UpdateIdeaDto {
+  title?: string;
+  body?: string | null;
+}
+
+/**
+ * POST /ideas/:id/convert — promote an Idea to a Task (ADR 0090). `listId` is REQUIRED — the owner picks the
+ * destination list (no Inbox, no auto-create); 400 if it is not an existing list of the owner. The task is
+ * created with title -> title, body -> notes, needsDetails: true, and the idea is deleted, in one transaction.
+ */
+export interface ConvertIdeaDto {
+  listId: string;
 }

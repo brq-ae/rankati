@@ -85,6 +85,9 @@ export function toTaskDto(task: TaskWithRelations): TaskDto {
     // The "needs details" flag (ADR 0073) — a plain boolean soft marker, never a gate. Carried on
     // every read from this slice on; the set-on-create/clear-on-edit lifecycle is the next slice.
     needsDetails: task.needsDetails,
+    // Free-text notes (ADR 0090) — INERT: carried to the wire exactly like title, NEVER read by any
+    // ranking/gate/Today/Arena query. Plain nullable string. The update-path handling is the next slice.
+    notes: task.notes,
     // The impact pin's snooze instant (ADRs 0075, 0086) — Date -> ISO like createdAt, or null. Carried on
     // every read so the client derives the snooze map straight from the task list.
     pinSnoozedUntil: task.pinSnoozedUntil ? task.pinSnoozedUntil.toISOString() : null,
