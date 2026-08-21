@@ -21,13 +21,22 @@ const CONFIG: TelegramConfigDto = {
 };
 
 let digestPuts: unknown[];
+let quietPuts: unknown[];
 
 function jsonRes(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as unknown as Response;
 }
 
-function installFetch(config: TelegramConfigDto, statusVal = 'running') {
+type Quiet = { start: string | null; end: string | null };
+
+function installFetch(
+  config: TelegramConfigDto,
+  statusVal = 'running',
+  quiet: Quiet = { start: null, end: null },
+) {
   digestPuts = [];
+  quietPuts = [];
+  let quietState = quiet;
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const path = String(input);
     const method = init?.method ?? 'GET';
@@ -36,6 +45,13 @@ function installFetch(config: TelegramConfigDto, statusVal = 'running') {
     if (path.endsWith('/telegram/digest') && method === 'PUT') {
       digestPuts.push(JSON.parse(String(init?.body)));
       return jsonRes(config);
+    }
+    if (path.endsWith('/settings/quiet-hours')) {
+      if (method === 'PUT') {
+        quietState = JSON.parse(String(init?.body)) as Quiet;
+        quietPuts.push(quietState);
+      }
+      return jsonRes(quietState);
     }
     return jsonRes({});
   });
@@ -108,5 +124,70 @@ describe('Telegram settings UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
 
     await waitFor(() => expect(screen.getByText(/press Ctrl\/Cmd\+C/i)).toBeTruthy());
+  });
+});
+
+describe('Quiet hours (ADR 0091)', () => {
+  const enableDigest = () => fireEvent.click(screen.getByLabelText('Enable daily digest'));
+  const setDigestTime = (v: string) => fireEvent.change(screen.getByLabelText('Digest time'), { target: { value: v } });
+  const start = () => screen.getByLabelText('Quiet hours start') as HTMLInputElement;
+  const end = () => screen.getByLabelText('Quiet hours end') as HTMLInputElement;
+
+  it('loads the stored window into the inputs', async () => {
+    installFetch(CONFIG, 'running', { start: '22:00', end: '08:00' });
+    render(<TelegramSettings />);
+    await waitFor(() => expect(start().value).toBe('22:00'));
+    expect(end().value).toBe('08:00');
+  });
+
+  it('shows the live "delayed until" notice when the digest time is INSIDE the window (wrap), hidden otherwise', async () => {
+    installFetch(CONFIG, 'running', { start: '22:00', end: '08:00' });
+    render(<TelegramSettings />);
+    await waitFor(() => expect(start().value).toBe('22:00'));
+    enableDigest();
+
+    setDigestTime('07:00'); // inside 22:00–08:00 (wrap) → delayed
+    await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/delayed until 08:00/i));
+
+    setDigestTime('09:00'); // outside → no notice
+    await waitFor(() => expect(screen.queryByRole('note')).toBeNull());
+  });
+
+  it('does not show the notice while the digest is disabled, even if the time is inside the window', async () => {
+    installFetch(CONFIG, 'running', { start: '22:00', end: '08:00' });
+    render(<TelegramSettings />);
+    await waitFor(() => expect(start().value).toBe('22:00'));
+    setDigestTime('07:00'); // inside, but digest not enabled
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('saves both ends via PUT and round-trips', async () => {
+    installFetch(CONFIG);
+    render(<TelegramSettings />);
+    await screen.findByLabelText('Quiet hours start');
+    fireEvent.change(start(), { target: { value: '23:00' } });
+    fireEvent.change(end(), { target: { value: '07:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save quiet hours' }));
+    await waitFor(() => expect(quietPuts).toEqual([{ start: '23:00', end: '07:00' }]));
+  });
+
+  it('a half-window is blocked client-side — guidance shown, Save disabled, no PUT (avoids the API 400)', async () => {
+    installFetch(CONFIG);
+    render(<TelegramSettings />);
+    await screen.findByLabelText('Quiet hours start');
+    fireEvent.change(start(), { target: { value: '22:00' } }); // only one end set
+    expect(screen.getByText(/set both a start and end/i)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Save quiet hours' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(quietPuts).toEqual([]);
+  });
+
+  it('clearing both turns it off (PUT null/null)', async () => {
+    installFetch(CONFIG, 'running', { start: '22:00', end: '08:00' });
+    render(<TelegramSettings />);
+    await waitFor(() => expect((screen.getByLabelText('Quiet hours start') as HTMLInputElement).value).toBe('22:00'));
+    fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save quiet hours' }));
+    await waitFor(() => expect(quietPuts).toEqual([{ start: null, end: null }]));
   });
 });

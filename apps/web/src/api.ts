@@ -16,6 +16,7 @@ import type {
   MergeLocationsDto,
   NextPairResult,
   PinDays,
+  QuietHours,
   ResetRequestDto,
   Routine,
   CreateRoutineDto,
@@ -420,6 +421,13 @@ export const getPinConfig = (): Promise<PinDays> => request<PinDays>('/api/setti
 /** Save the knobs; returns the server's VALIDATED result (a bad field defaulted, not rejected). */
 export const setPinConfig = (config: PinDays): Promise<PinDays> =>
   request<PinDays>('/api/settings/pin', { method: 'PUT', body: JSON.stringify(config) });
+
+/** Global quiet-hours (ADR 0091) — the window during which no Telegram push is sent. Both null = off. */
+export const getQuietHours = (): Promise<QuietHours> => request<QuietHours>('/api/settings/quiet-hours');
+
+/** Save quiet-hours; returns the saved window (both-or-neither + strict HH:MM, else the call rejects). */
+export const setQuietHours = (q: QuietHours): Promise<QuietHours> =>
+  request<QuietHours>('/api/settings/quiet-hours', { method: 'PUT', body: JSON.stringify(q) });
 
 /** Snooze a task's pin; returns the updated task (with pinSnoozedUntil set). */
 export const snoozePin = (taskId: string): Promise<Task> =>

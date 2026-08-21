@@ -77,6 +77,7 @@ Then, from your chat:
 - **Start a message with `#`** (or use **`/idea`**) to save it as an **idea** instead — a thought that isn't a task yet. It lands in the Ideas tab in the app, out of the engine, until you promote it.
 - **`/today`** deals your top tasks and **`/now`** shows the top one, each with a **✓ Done** button.
 - Optionally enable a **daily digest** (a time + your timezone) to have today's tasks pushed to you each morning.
+- Set **quiet hours** (a nightly window, in your digest timezone) to silence all Telegram messages while you sleep. A digest scheduled inside the window is delayed until the window ends, not dropped.
 - Your **most-neglected important task** leads `/today` and the digest as a ⚠️ **pin**, with **✓ Done** to complete it and **😴 Snooze** to hide it for a while — the same pin the web app shows, since its settings now live on the server.
 
 Your token is stored on your own server, shown masked, and never logged.

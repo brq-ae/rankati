@@ -480,6 +480,13 @@ model Settings {
   pinHighSnoozeDays   Int @default(1)
   pinMediumSnoozeDays Int @default(3)
 
+  /// Global quiet-hours (ADR 0091) — a local-time window "HH:MM"–"HH:MM" during which NO Telegram push is
+  /// sent (nag reminders AND the daily digest). BOTH null = off; set together. Evaluated in the digest
+  /// timezone (TelegramConfig.timezone), END-EXCLUSIVE and midnight-wrap-aware. A digest whose time falls
+  /// inside the window is DELAYED to quietEnd, never dropped (owner ruling 2026-08-21).
+  quietStart String?
+  quietEnd   String?
+
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])

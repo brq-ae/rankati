@@ -694,6 +694,20 @@ export interface UpdateTelegramDigestDto {
   timezone: string | null;
 }
 
+/**
+ * Global quiet-hours (ADR 0091) — a local-time window during which the app sends NO Telegram push (nag
+ * reminders AND the daily digest). Stored on the Settings singleton, surfaced in Settings → Telegram; the
+ * window is evaluated in the digest timezone (TelegramConfig.timezone), END-EXCLUSIVE `[start, end)` and
+ * midnight-wrap-aware. Both null = off; they are set together. A digest whose time falls inside the window
+ * is delayed to `end`, never dropped (owner ruling 2026-08-21). Used by GET/PUT /api/settings/quiet-hours.
+ */
+export interface QuietHours {
+  /** "HH:MM", 00:00–23:59 — window start (inclusive). null (with `end` null) = quiet-hours off. */
+  start: string | null;
+  /** "HH:MM", 00:00–23:59 — window end (EXCLUSIVE). null (with `start` null) = quiet-hours off. */
+  end: string | null;
+}
+
 // The graded impact pin — pure logic shared across web + api/bot (ADRs 0075, 0086).
 export * from './pin';
 
@@ -702,6 +716,9 @@ export * from './logs';
 
 // The Routines climb order — pure logic shared across web + api/bot (ADRs 0066, 0088).
 export * from './routine-sort';
+
+// Quiet-hours window logic — pure, shared across web + api/bot (ADR 0091).
+export * from './quiet-hours';
 
 /**
  * A Log (ADR 0087) — a pull-based cadence tracker, the opposite of a Routine (its occurrences ARE its

@@ -1,9 +1,11 @@
 import type { TelegramBotStatus, TelegramConfigDto, TelegramStatusDto } from '@rankati/shared';
+import { isWithinQuietHours } from '@rankati/shared';
 import { useEffect, useRef, useState } from 'react';
 import {
   deleteTelegramToken,
   getTelegramStatus,
   regenerateTelegramCode,
+  setQuietHours,
   setTelegramDigest,
   setTelegramToken,
   unlinkTelegram,
@@ -62,6 +64,9 @@ export default function TelegramSettings() {
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState('08:00');
   const [tz, setTz] = useState('');
+  // Global quiet-hours (ADR 0091) — '' = unset. Stored on the Settings singleton, shown here.
+  const [quietStart, setQuietStart] = useState('');
+  const [quietEnd, setQuietEnd] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [copyHint, setCopyHint] = useState<string | null>(null);
@@ -77,9 +82,10 @@ export default function TelegramSettings() {
     let live = true;
     (async () => {
       try {
-        const [cRes, sRes] = await Promise.all([
+        const [cRes, sRes, qRes] = await Promise.all([
           fetch('/api/telegram/config'),
           fetch('/api/telegram/status'),
+          fetch('/api/settings/quiet-hours'),
         ]);
         if (!cRes.ok || !sRes.ok) throw new Error('Could not load Telegram settings.');
         const c = (await cRes.json()) as TelegramConfigDto;
@@ -90,6 +96,12 @@ export default function TelegramSettings() {
         setEnabled(c.digestEnabled);
         setTime(c.digestTime);
         setTz(c.timezone ?? detectedTimezone());
+        // Quiet-hours loads best-effort — a failure here must not break the whole panel.
+        if (qRes.ok) {
+          const q = (await qRes.json()) as { start: string | null; end: string | null };
+          setQuietStart(q.start ?? '');
+          setQuietEnd(q.end ?? '');
+        }
       } catch (e) {
         if (live) setLoadError(e instanceof Error ? e.message : 'Could not load Telegram settings.');
       }
@@ -155,6 +167,27 @@ export default function TelegramSettings() {
       return;
     }
     await run(() => setTelegramDigest({ enabled, time, timezone: zone || null }));
+  };
+
+  // Quiet-hours: both-or-neither (the API 400s a half-window, so the button is disabled until valid).
+  const quietHalfSet = (quietStart !== '') !== (quietEnd !== '');
+  const quietWindow = { start: quietStart || null, end: quietEnd || null };
+  // The live delay notice — reuses the SHARED window rule, never recomputed here (ADR 0091).
+  const digestDelayed = enabled && isWithinQuietHours(time, quietWindow);
+
+  const saveQuietHours = async () => {
+    if (quietHalfSet) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const saved = await setQuietHours(quietWindow);
+      setQuietStart(saved.start ?? '');
+      setQuietEnd(saved.end ?? '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save quiet hours.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const copyCode = async () => {
@@ -352,6 +385,55 @@ export default function TelegramSettings() {
         <div>
           <button type="button" className={btnCls} onClick={saveDigest} disabled={busy}>
             Save digest
+          </button>
+        </div>
+      </div>
+
+      {/* Quiet hours (ADR 0091) — a window during which no Telegram push (nags or the digest) is sent. */}
+      <div className="flex flex-col gap-2 text-sm">
+        <span className="text-xs font-medium text-muted">Quiet hours</span>
+        <p className="text-xs text-faint">
+          No Telegram messages are sent during this window (in your digest timezone). Leave both blank to
+          turn it off.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1">
+            <span className="text-muted">from</span>
+            <input
+              type="time"
+              value={quietStart}
+              onChange={(e) => setQuietStart(e.target.value)}
+              aria-label="Quiet hours start"
+              className={`${inputCls} w-28`}
+            />
+          </label>
+          <label className="flex items-center gap-1">
+            <span className="text-muted">to</span>
+            <input
+              type="time"
+              value={quietEnd}
+              onChange={(e) => setQuietEnd(e.target.value)}
+              aria-label="Quiet hours end"
+              className={`${inputCls} w-28`}
+            />
+          </label>
+        </div>
+        {quietHalfSet && (
+          <span className="text-sm text-danger">Set both a start and end, or clear both.</span>
+        )}
+        {digestDelayed && (
+          <span role="note" className="text-xs text-muted">
+            Digest at {time} is within quiet hours — it&rsquo;ll be delayed until {quietEnd}.
+          </span>
+        )}
+        <div>
+          <button
+            type="button"
+            className={btnCls}
+            onClick={saveQuietHours}
+            disabled={busy || quietHalfSet}
+          >
+            Save quiet hours
           </button>
         </div>
       </div>

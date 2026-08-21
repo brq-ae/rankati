@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { DEFAULT_PIN_DAYS, type PinDays } from '@rankati/shared';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { DEFAULT_PIN_DAYS, type PinDays, type QuietHours, hhmmToMinutes } from '@rankati/shared';
 import { LOCAL_OWNER_ID } from './constants';
 import type { Settings } from './generated/prisma/client';
 import { PrismaService } from './prisma.service';
@@ -61,5 +61,48 @@ export class SettingsService {
       },
     });
     return toPinDays(updated);
+  }
+
+  /** Global quiet-hours (ADR 0091). Both null = off. */
+  async getQuietHours(): Promise<QuietHours> {
+    const s = await this.getOrCreate();
+    return { start: s.quietStart, end: s.quietEnd };
+  }
+
+  /**
+   * Save quiet-hours (ADR 0091). Unlike the pin knobs (each field defaults independently), quiet-hours is
+   * BOTH-OR-NEITHER and rejects a malformed value — an ambiguous window would silently mute or fail to mute
+   * Telegram push, so a bad request is a clean 400, never a coerced default:
+   *   { start: null,   end: null   } -> off
+   *   { start: "HH:MM", end: "HH:MM" } -> the window (each validated strict 24h; start==end allowed = off)
+   *   one set + one null, or any malformed time -> 400
+   */
+  async setQuietHours(raw: unknown): Promise<QuietHours> {
+    const body = (raw ?? {}) as { start?: unknown; end?: unknown };
+    const startRaw = body.start ?? null;
+    const endRaw = body.end ?? null;
+
+    if (startRaw === null && endRaw === null) {
+      return this.writeQuietHours(null, null); // off
+    }
+    if (startRaw === null || endRaw === null) {
+      throw new BadRequestException('quiet-hours start and end must both be set or both be null');
+    }
+    if (typeof startRaw !== 'string' || hhmmToMinutes(startRaw) === null) {
+      throw new BadRequestException('quiet-hours start must be "HH:MM" (24h) or null');
+    }
+    if (typeof endRaw !== 'string' || hhmmToMinutes(endRaw) === null) {
+      throw new BadRequestException('quiet-hours end must be "HH:MM" (24h) or null');
+    }
+    return this.writeQuietHours(startRaw, endRaw);
+  }
+
+  private async writeQuietHours(start: string | null, end: string | null): Promise<QuietHours> {
+    const current = await this.getOrCreate();
+    const updated = await this.prisma.settings.update({
+      where: { id: current.id },
+      data: { quietStart: start, quietEnd: end },
+    });
+    return { start: updated.quietStart, end: updated.quietEnd };
   }
 }

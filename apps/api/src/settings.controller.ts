@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Put } from '@nestjs/common';
-import type { PinDays } from '@rankati/shared';
+import type { PinDays, QuietHours } from '@rankati/shared';
 import { SettingsService } from './settings.service';
 
 /**
@@ -21,5 +21,17 @@ export class SettingsController {
   @Put('pin')
   setPin(@Body() body: unknown): Promise<PinDays> {
     return this.settings.setPinConfig(body);
+  }
+
+  /** Global quiet-hours (ADR 0091) — the window during which no Telegram push is sent. Both null = off. */
+  @Get('quiet-hours')
+  getQuietHours(): Promise<QuietHours> {
+    return this.settings.getQuietHours();
+  }
+
+  /** Save quiet-hours; returns the saved window. Both-or-neither + strict HH:MM, else 400. */
+  @Put('quiet-hours')
+  setQuietHours(@Body() body: unknown): Promise<QuietHours> {
+    return this.settings.setQuietHours(body);
   }
 }

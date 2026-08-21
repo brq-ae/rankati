@@ -54,6 +54,7 @@ Rankati can connect to a Telegram bot **you** own — it runs inside the `rankat
 2. In Rankati, **Settings → Telegram** → paste the token → **Connect**. The badge shows whether the bot is connected.
 3. Send the shown **link code** to your bot to bind your chat (one-time; only that chat is served).
 4. Optionally turn on the **daily digest** — a send time plus your timezone.
+5. Optionally set **quiet hours** — a nightly window (evaluated in your digest timezone) during which Rankati sends no Telegram messages. A digest scheduled inside the window is delayed until the window ends rather than dropped, with a live notice in Settings.
 
 Capture by texting the bot; read with `/today` and `/now`; complete with the ✓ buttons. Start a message with **`#`** (or use **`/idea`**) to save it as an **idea** rather than a task — it appears in the Ideas tab, outside the engine, until you promote it. `/today` and the digest lead with your ⚠️ **impact pin** (the most-neglected important task) carrying **✓ Done** and **😴 Snooze**. The token is stored on your server (masked in the UI, never logged).
 

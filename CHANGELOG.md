@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0] — 2026-08-21
+
+### Added
+
+- **Quiet hours for Telegram.** Set a nightly window (e.g. 22:00–08:00, in your digest timezone) in **Settings → Telegram**, and Rankati sends **no** Telegram messages during it — nothing pings you while you sleep. If your daily digest is scheduled inside the window, it isn't lost: it's **delayed until the window ends** rather than dropped, and Settings shows a live note (e.g. "Digest at 07:00 is within quiet hours — it'll be delayed until 08:00") so you know. Leave both times blank to turn it off. (Groundwork for the upcoming Telegram nag-reminders.)
+
 ## [0.38.0] — 2026-08-16
 
 ### Added

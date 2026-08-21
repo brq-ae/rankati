@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { hhmmToMinutes, isWithinQuietMinutes } from '@rankati/shared';
 import { CLOCK, type Clock } from '../auth/clock';
+import { SettingsService } from '../settings.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramConfigService } from './telegram-config.service';
 
@@ -46,6 +48,7 @@ export class TelegramDigestService implements OnModuleDestroy {
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly config: TelegramConfigService,
     private readonly bot: TelegramBotService,
+    private readonly settings: SettingsService,
   ) {}
 
   /** Start the per-minute loop. Called from main.ts after listen, so the test harness never opens it. */
@@ -85,7 +88,21 @@ export class TelegramDigestService implements OnModuleDestroy {
 
       const target = parseHhMm(s.time);
       if (target === null) return; // malformed (validated on write; defensive)
-      if (local.minutes < target || local.minutes >= target + GRACE_MINUTES) return; // outside the window
+
+      // Quiet-hours (ADR 0091): the app sends NO Telegram push while inside the window. A digest whose
+      // time falls INSIDE quiet-hours is DELAYED to quiet-end, not dropped (owner ruling 2026-08-21) —
+      // so the EFFECTIVE send time is `target` normally, else quiet-end. We fire in [effective, +grace),
+      // and never while currently quiet (belt-and-suspenders — a grace window that bled into a quiet
+      // onset must not push). A suppressed tick returns WITHOUT marking sent, so it retries / rolls.
+      const quiet = await this.settings.getQuietHours();
+      const qStart = quiet.start === null ? null : hhmmToMinutes(quiet.start);
+      const qEnd = quiet.end === null ? null : hhmmToMinutes(quiet.end);
+      let effective = target;
+      if (qStart !== null && qEnd !== null) {
+        if (isWithinQuietMinutes(local.minutes, qStart, qEnd)) return; // currently quiet → no push at all
+        if (isWithinQuietMinutes(target, qStart, qEnd)) effective = qEnd; // digest inside quiet → delay to quiet-end
+      }
+      if (local.minutes < effective || local.minutes >= effective + GRACE_MINUTES) return; // outside the window
 
       const result = await this.bot.pushHand(s.boundChatId);
       if (result === 'sent') {

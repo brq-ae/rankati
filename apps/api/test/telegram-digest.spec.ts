@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { QuietHours } from '@rankati/shared';
 import type { Clock } from '../src/auth/clock';
+import type { SettingsService } from '../src/settings.service';
 import type { DigestState, TelegramConfigService } from '../src/telegram/telegram-config.service';
 import type { TelegramBotService } from '../src/telegram/telegram-bot.service';
 import { localNow, TelegramDigestService } from '../src/telegram/telegram-digest.service';
@@ -17,9 +19,11 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
   let nowDate: Date;
   let pushResult: PushResult;
   let pushCalls: string[];
+  let quiet: QuietHours;
   let svc: TelegramDigestService;
 
   const clock: Clock = { now: () => nowDate };
+  const settings = { getQuietHours: async () => quiet } as unknown as SettingsService;
   const config = {
     getDigestState: async () => state,
     markDigestSent: async (d: string) => {
@@ -43,8 +47,9 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     marked = [];
     pushResult = 'sent';
     pushCalls = [];
+    quiet = { start: null, end: null }; // quiet-hours OFF by default → existing tests unaffected
     nowDate = new Date('2026-07-27T08:05:00Z');
-    svc = new TelegramDigestService(clock, config, bot);
+    svc = new TelegramDigestService(clock, config, bot, settings);
   });
 
   it('fires inside the window and marks the local date on a successful send', async () => {
@@ -129,6 +134,62 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     svc.stop();
     svc.stop();
     expect(() => svc.onModuleDestroy()).not.toThrow();
+  });
+
+  // ── Quiet-hours (ADR 0091): delay-not-drop + never-push-while-quiet ──────────────────────────────
+  describe('quiet-hours', () => {
+    it('does NOT push while currently inside the quiet window, and does not mark sent', async () => {
+      // digest 08:00, quiet 22:00–08:00; "now" 07:30 is inside quiet → suppressed, pending (not marked).
+      state = { ...state, time: '08:00', lastSentOn: null };
+      quiet = { start: '22:00', end: '08:00' };
+      at('2026-07-27T07:30:00Z');
+      await svc.tick();
+      expect(pushCalls).toEqual([]);
+      expect(marked).toEqual([]); // stays pending → retries / rolls; no double-send risk
+    });
+
+    it('a digest scheduled INSIDE quiet-hours ACTUALLY FIRES at quiet-end (delay, not drop)', async () => {
+      // digest 07:00 is inside quiet 22:00–08:00 → effective send time is quiet-end 08:00.
+      state = { ...state, time: '07:00', lastSentOn: null };
+      quiet = { start: '22:00', end: '08:00' };
+
+      at('2026-07-27T07:00:00Z'); // its own time, but inside quiet → suppressed
+      await svc.tick();
+      expect(pushCalls).toEqual([]);
+
+      at('2026-07-27T08:00:00Z'); // quiet-end (end-exclusive) → FIRES here
+      await svc.tick();
+      expect(pushCalls).toEqual(['42']);
+      expect(marked).toEqual(['2026-07-27']); // fired once, at quiet-end
+    });
+
+    it('fires the delayed digest EXACTLY ONCE (no double-send after quiet-end)', async () => {
+      state = { ...state, time: '07:00', lastSentOn: null };
+      quiet = { start: '22:00', end: '08:00' };
+      at('2026-07-27T08:00:00Z');
+      await svc.tick(); // fires + marks
+      at('2026-07-27T08:01:00Z');
+      await svc.tick(); // already sent today → no second push
+      expect(pushCalls).toEqual(['42']);
+    });
+
+    it('a normal digest OUTSIDE quiet-hours is unaffected', async () => {
+      // digest 09:00, quiet 22:00–08:00; 09:00 is not in quiet → fires at its own time.
+      state = { ...state, time: '09:00', lastSentOn: null };
+      quiet = { start: '22:00', end: '08:00' };
+      at('2026-07-27T09:00:00Z');
+      await svc.tick();
+      expect(pushCalls).toEqual(['42']);
+      expect(marked).toEqual(['2026-07-27']);
+    });
+
+    it('a digest AT quiet-end (08:00, end-exclusive) fires normally — not treated as inside quiet', async () => {
+      state = { ...state, time: '08:00', lastSentOn: null };
+      quiet = { start: '22:00', end: '08:00' };
+      at('2026-07-27T08:00:00Z');
+      await svc.tick();
+      expect(pushCalls).toEqual(['42']);
+    });
   });
 });
 
