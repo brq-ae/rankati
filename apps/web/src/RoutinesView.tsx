@@ -4,6 +4,7 @@ import {
   createRoutine,
   deleteRoutine,
   getRoutines,
+  getTelegramConfig,
   routineDid,
   routineDismiss,
   routineSnooze,
@@ -37,6 +38,10 @@ export default function RoutinesView({ on }: { on: string }) {
   const [now, setNow] = useState(() => Date.now());
   const [form, setForm] = useState<{ routine: Routine | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The nag channel's readiness — the form warns when a reminder can't actually fire (ADR 0091 M2:
+  // the scheduler gates on a bound chat AND a timezone). Default + fetch-failure = not-ready, so the
+  // warning shows rather than falsely reassuring (fail toward warning).
+  const [telegram, setTelegram] = useState<{ bound: boolean; timezone: string | null }>({ bound: false, timezone: null });
 
   const load = useCallback(() => {
     getRoutines(on)
@@ -44,6 +49,11 @@ export default function RoutinesView({ on }: { on: string }) {
       .catch((e: Error) => setError(e.message));
   }, [on]);
   useEffect(() => load(), [load]);
+  useEffect(() => {
+    getTelegramConfig()
+      .then((c) => setTelegram({ bound: c.bound, timezone: c.timezone }))
+      .catch(() => setTelegram({ bound: false, timezone: null }));
+  }, []);
   // Re-tick so a snooze resurfaces when it elapses (only the client knows the exact time).
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 20_000);
@@ -173,7 +183,16 @@ export default function RoutinesView({ on }: { on: string }) {
         </ul>
       )}
 
-      {form && <RoutineForm routine={form.routine} on={on} onSubmit={onSubmit} onCancel={() => setForm(null)} />}
+      {form && (
+        <RoutineForm
+          routine={form.routine}
+          on={on}
+          telegramBound={telegram.bound}
+          serverTimezone={telegram.timezone}
+          onSubmit={onSubmit}
+          onCancel={() => setForm(null)}
+        />
+      )}
     </>
   );
 }

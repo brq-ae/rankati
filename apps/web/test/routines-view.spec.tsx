@@ -34,10 +34,24 @@ const routine = (over: Partial<Routine>): Routine => ({
   ruleWeekday: null,
   ruleDayOfMonth: null,
   acknowledgedDate: null,
+  telegramNag: false,
+  nagIntervalMinutes: null,
+  linkedLogId: null,
   ...over,
 });
 const floating = (o: Partial<Routine>) => routine({ type: 'interval_floating', intervalUnit: 'week', intervalCount: 1, ...o });
 const fixed = (o: Partial<Routine>) => routine({ type: 'interval_fixed', ruleKind: 'day_of_month', ruleDayOfMonth: 15, ...o });
+const tgConfig = (over: Partial<import('@rankati/shared').TelegramConfigDto>) => ({
+  configured: true,
+  tokenMask: '••••1234',
+  bound: true,
+  boundChatId: '42',
+  linkCode: null,
+  digestEnabled: false,
+  digestTime: '08:00',
+  timezone: 'Asia/Dubai',
+  ...over,
+});
 
 beforeEach(() => {
   seq = 0;
@@ -48,6 +62,7 @@ beforeEach(() => {
   vi.mocked(api.createRoutine).mockResolvedValue(routine({}));
   vi.mocked(api.updateRoutine).mockResolvedValue(routine({}));
   vi.mocked(api.deleteRoutine).mockResolvedValue(undefined);
+  vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({})); // default: channel ready (no warning)
 });
 afterEach(() => {
   cleanup();
@@ -137,5 +152,127 @@ describe('RoutinesView — create & edit', () => {
     fireEvent.change(input, { target: { value: 'New name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateRoutine).toHaveBeenCalledWith('e1', { on: ON, name: 'New name' }));
+  });
+});
+
+describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
+  const openNew = async () => {
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: '+ New routine' }));
+    await screen.findByLabelText('Routine name');
+  };
+
+  it('the nag-frequency picker is hidden until "Remind me on Telegram" is on', async () => {
+    await openNew();
+    expect(screen.queryByLabelText('Nag frequency')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
+    expect(screen.getByLabelText('Nag frequency')).not.toBeNull(); // revealed
+  });
+
+  it('the log-link toggle is hidden for frequency, shown for non-frequency types', async () => {
+    await openNew();
+    expect(screen.queryByLabelText('Log each completion')).toBeNull(); // default type = frequency
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    expect(screen.getByLabelText('Log each completion')).not.toBeNull();
+  });
+
+  it('creating a floating routine with nag + link threads telegramNag/nagIntervalMinutes/linkLog', async () => {
+    await openNew();
+    fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Water plants' } });
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
+    fireEvent.change(screen.getByLabelText('Nag frequency'), { target: { value: '30' } });
+    fireEvent.click(screen.getByLabelText('Log each completion'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Water plants',
+          type: 'interval_floating',
+          telegramNag: true,
+          nagIntervalMinutes: 30,
+          linkLog: true,
+        }),
+      ),
+    );
+  });
+
+  it('does NOT send nag/link fields when the toggles stay off (create)', async () => {
+    await openNew();
+    fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Plain' } });
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createRoutine).toHaveBeenCalled());
+    const dto = vi.mocked(api.createRoutine).mock.calls[0]![0];
+    expect(dto).not.toHaveProperty('telegramNag');
+    expect(dto).not.toHaveProperty('linkLog');
+  });
+
+  it('editing an already-nagging routine sends only the changed cadence', async () => {
+    vi.mocked(api.getRoutines).mockResolvedValue([
+      floating({ id: 'n1', name: 'Vitamins', nextDue: '2026-01-20', telegramNag: true, nagIntervalMinutes: 60 }),
+    ]);
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Vitamins' }));
+    await screen.findByLabelText('Nag frequency');
+    fireEvent.change(screen.getByLabelText('Nag frequency'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateRoutine).toHaveBeenCalledWith('n1', { on: ON, nagIntervalMinutes: 120 }));
+  });
+
+  it('turning nagging OFF in edit sends telegramNag:false (and no cadence)', async () => {
+    vi.mocked(api.getRoutines).mockResolvedValue([
+      floating({ id: 'n2', name: 'Floss', nextDue: '2026-01-20', telegramNag: true, nagIntervalMinutes: 30 }),
+    ]);
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Floss' }));
+    fireEvent.click(await screen.findByLabelText('Remind me on Telegram')); // toggle off
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateRoutine).toHaveBeenCalledWith('n2', { on: ON, telegramNag: false }));
+  });
+});
+
+describe('RoutinesView — nag readiness warning (ADR 0091 M2 addendum)', () => {
+  const openNagOn = async () => {
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: '+ New routine' }));
+    await screen.findByLabelText('Routine name');
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
+  };
+
+  it('warns to connect the bot AND set a timezone when neither is ready', async () => {
+    vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({ bound: false, timezone: null }));
+    await openNagOn();
+    expect(await screen.findByText(/bot connected and a timezone set/i)).not.toBeNull();
+  });
+
+  it('warns only about the timezone when the bot is connected but no tz', async () => {
+    vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({ bound: true, timezone: null }));
+    await openNagOn();
+    expect(await screen.findByText(/need a timezone set/i)).not.toBeNull();
+  });
+
+  it('warns only about the bot when a timezone is set but the bot is not connected', async () => {
+    vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({ bound: false, timezone: 'Asia/Dubai' }));
+    await openNagOn();
+    expect(await screen.findByText(/bot connected \(Settings/i)).not.toBeNull();
+  });
+
+  it('shows NO warning once the channel is ready (bound + timezone)', async () => {
+    vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({ bound: true, timezone: 'Asia/Dubai' }));
+    await openNagOn();
+    // Initial state is fail-toward-warning; it clears once the (ready) config resolves.
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('shows NO warning while nagging is off, even when the channel is not ready', async () => {
+    vi.mocked(api.getTelegramConfig).mockResolvedValue(tgConfig({ bound: false, timezone: null }));
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: '+ New routine' }));
+    await screen.findByLabelText('Routine name');
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    // toggle left OFF → no warning regardless of readiness
+    expect(screen.queryByText(/Reminders need/i)).toBeNull();
   });
 });

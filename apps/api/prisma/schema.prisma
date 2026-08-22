@@ -399,6 +399,22 @@ model Routine {
   /// The dismissed occurrence, so a fixed reminder stays dismissed until that date passes (0066).
   acknowledgedDate DateTime?             @db.Date
 
+  // Telegram nag-reminders (ADR 0091 M2) — opt-in proactive nagging while a routine is due and unsatisfied.
+  /// Opt in to Telegram nagging. Default false, so every existing routine is unaffected.
+  telegramNag        Boolean   @default(false)
+  /// How often (minutes) to re-ping while due + unsatisfied — one of 1 / 30 / 60 / 120. NULL when off.
+  nagIntervalMinutes Int?
+  /// When the last nag fired — the cadence anchor (next nag = this + nagIntervalMinutes). Server-only.
+  lastNaggedAt       DateTime?
+  /// "Skip today" mutes ONLY the nag until this instant (the next due period), leaving the routine visible
+  /// in-app — deliberately distinct from `snoozedUntil` (the app's display hide). NULL = not skipped. Server-only.
+  nagSkipUntil       DateTime?
+  /// Optional reminder→log link (ADR 0091, ≤1/day routines only — floating/fixed, never frequency): the
+  /// nag's "Did it" also records today in this Log (idempotent per day). NULL = not linked. A soft, plain
+  /// id (no FK): a deleted Log is handled gracefully at write time (owner-scoped `logs.did` 404s → the
+  /// routine is still satisfied), never a dangling cascade.
+  linkedLogId        String?
+
   @@index([ownerId])
 }
 

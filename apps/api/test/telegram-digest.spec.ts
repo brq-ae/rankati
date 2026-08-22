@@ -37,6 +37,14 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
       return pushResult;
     },
   } as unknown as TelegramBotService;
+  // The nag pass is unit-tested in telegram-nag.spec.ts; here it is a no-op spy so the digest tests stay
+  // focused on digest behaviour, while confirming the tick calls it (with local + the bound chat).
+  const nagCalls: { date: string; minutes: number; chatId: string }[] = [];
+  const nags = {
+    evaluate: async (local: { date: string; minutes: number }, chatId: string) => {
+      nagCalls.push({ ...local, chatId });
+    },
+  } as unknown as import('../src/telegram/telegram-nag.service').TelegramNagService;
 
   const at = (iso: string) => {
     nowDate = new Date(iso);
@@ -49,7 +57,8 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     pushCalls = [];
     quiet = { start: null, end: null }; // quiet-hours OFF by default → existing tests unaffected
     nowDate = new Date('2026-07-27T08:05:00Z');
-    svc = new TelegramDigestService(clock, config, bot, settings);
+    nagCalls.length = 0;
+    svc = new TelegramDigestService(clock, config, bot, settings, nags);
   });
 
   it('fires inside the window and marks the local date on a successful send', async () => {
@@ -134,6 +143,31 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     svc.stop();
     svc.stop();
     expect(() => svc.onModuleDestroy()).not.toThrow();
+  });
+
+  // ── Nag pass (ADR 0091 M2): the tick drives it, independent of the digest toggle ─────────────────
+  describe('nag pass integration', () => {
+    it('the tick calls the nag evaluate with the local day/minute + the bound chat', async () => {
+      at('2026-07-27T08:05:00Z'); // 08:05 UTC → minutes 485
+      await svc.tick();
+      expect(nagCalls).toEqual([{ date: '2026-07-27', minutes: 485, chatId: '42' }]);
+    });
+
+    it('the nag pass runs even when the daily digest is DISABLED (nagging is per-routine)', async () => {
+      state = { ...state, enabled: false };
+      await svc.tick();
+      expect(nagCalls).toHaveLength(1); // nags evaluated
+      expect(pushCalls).toEqual([]); // but no digest sent
+    });
+
+    it('no bound chat / no timezone → neither the digest nor the nag pass runs', async () => {
+      state = { ...state, boundChatId: null };
+      await svc.tick();
+      expect(nagCalls).toEqual([]);
+      state = { enabled: true, time: '08:00', timezone: null, boundChatId: '42', lastSentOn: null };
+      await svc.tick();
+      expect(nagCalls).toEqual([]);
+    });
   });
 
   // ── Quiet-hours (ADR 0091): delay-not-drop + never-push-while-quiet ──────────────────────────────

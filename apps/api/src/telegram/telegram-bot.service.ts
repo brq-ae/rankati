@@ -12,6 +12,10 @@ import {
   decodeDiscard,
   decodeDone,
   decodeListPick,
+  decodeNagDid,
+  decodeNagLater,
+  decodeNagSkip,
+  decodeNagSnooze,
   decodePinSnooze,
   decodeRefile,
   DISCARD_TRIGGER,
@@ -22,6 +26,10 @@ import {
   encodePinSnooze,
   encodeRefile,
   LIST_PICK_TRIGGER,
+  NAG_DID_TRIGGER,
+  NAG_LATER_TRIGGER,
+  NAG_SKIP_TRIGGER,
+  NAG_SNOOZE_TRIGGER,
   PIN_SNOOZE_TRIGGER,
   REFILE_TRIGGER,
 } from './telegram-callback';
@@ -31,6 +39,7 @@ import {
   type IdeaCaptureResult,
 } from './telegram-capture.service';
 import { TelegramConfigService } from './telegram-config.service';
+import { TelegramNagActionsService } from './telegram-nag-actions.service';
 import { TelegramReadService, type PinInfo } from './telegram-read.service';
 import type { LogSummary } from '../logs.service';
 import { PinSnoozeService } from '../pin-snooze.service';
@@ -100,6 +109,7 @@ export class TelegramBotService implements OnModuleDestroy {
     private readonly capture: TelegramCaptureService,
     private readonly read: TelegramReadService,
     private readonly pinSnooze: PinSnoozeService,
+    private readonly nagActions: TelegramNagActionsService,
     @Inject(TELEGRAM_BOT_FACTORY) private readonly createBot: TelegramBotFactory,
   ) {}
 
@@ -422,6 +432,68 @@ export class TelegramBotService implements OnModuleDestroy {
       });
     });
 
+    // ── Nag-reminder buttons (ADR 0091 M2). Same shape as pin-snooze: bound-chat gate → decode-or-reject →
+    //    owner-scoped action (via nagActions/routines, which 404 a foreign/stale routine) → answer + edit. ──
+    const NO_TZ = 'Set a timezone in Settings → Telegram first.';
+    const GONE = 'That reminder is no longer available.';
+
+    bot.callbackQuery(NAG_DID_TRIGGER, async (ctx) => {
+      if (!(await this.boundCallbackChat(ctx))) return;
+      const routineId = decodeNagDid(ctx.callbackQuery?.data ?? '');
+      if (!routineId) return void ctx.answerCallbackQuery('That button is no longer valid.');
+      let confirm: string | null;
+      try {
+        confirm = await this.nagActions.handleDid(routineId);
+      } catch (err) {
+        this.logError('nag did failed', err);
+        return void ctx.answerCallbackQuery(GONE);
+      }
+      if (confirm === null) return void ctx.answerCallbackQuery(NO_TZ);
+      await ctx.answerCallbackQuery(confirm);
+      await ctx.editMessageText(confirm, { reply_markup: { inline_keyboard: [] } }); // drop the buttons
+    });
+
+    bot.callbackQuery(NAG_LATER_TRIGGER, async (ctx) => {
+      if (!(await this.boundCallbackChat(ctx))) return;
+      const routineId = decodeNagLater(ctx.callbackQuery?.data ?? '');
+      if (!routineId) return void ctx.answerCallbackQuery('That button is no longer valid.');
+      await ctx.answerCallbackQuery();
+      // Re-render IN PLACE to the 1h / 3h / until-morning span submenu (its span codec).
+      await ctx.editMessageText('Remind you again in…', { reply_markup: this.nagActions.laterMenu(routineId) });
+    });
+
+    bot.callbackQuery(NAG_SNOOZE_TRIGGER, async (ctx) => {
+      if (!(await this.boundCallbackChat(ctx))) return;
+      const decoded = decodeNagSnooze(ctx.callbackQuery?.data ?? '');
+      if (!decoded) return void ctx.answerCallbackQuery('That button is no longer valid.');
+      let confirm: string | null;
+      try {
+        confirm = await this.nagActions.handleSnooze(decoded.routineId, decoded.span);
+      } catch (err) {
+        this.logError('nag snooze failed', err);
+        return void ctx.answerCallbackQuery(GONE);
+      }
+      if (confirm === null) return void ctx.answerCallbackQuery(NO_TZ);
+      await ctx.answerCallbackQuery(confirm);
+      await ctx.editMessageText(confirm, { reply_markup: { inline_keyboard: [] } });
+    });
+
+    bot.callbackQuery(NAG_SKIP_TRIGGER, async (ctx) => {
+      if (!(await this.boundCallbackChat(ctx))) return;
+      const routineId = decodeNagSkip(ctx.callbackQuery?.data ?? '');
+      if (!routineId) return void ctx.answerCallbackQuery('That button is no longer valid.');
+      let confirm: string | null;
+      try {
+        confirm = await this.nagActions.handleSkip(routineId);
+      } catch (err) {
+        this.logError('nag skip failed', err);
+        return void ctx.answerCallbackQuery(GONE);
+      }
+      if (confirm === null) return void ctx.answerCallbackQuery(NO_TZ);
+      await ctx.answerCallbackQuery(confirm);
+      await ctx.editMessageText(confirm, { reply_markup: { inline_keyboard: [] } });
+    });
+
     // A re-file button tap. Gated on the bound chat; the payload is verified against live rows before moving.
     bot.callbackQuery(REFILE_TRIGGER, async (ctx) => {
       const chatId = String(ctx.chat?.id ?? '');
@@ -723,11 +795,41 @@ export class TelegramBotService implements OnModuleDestroy {
     return 'sent';
   }
 
+  /**
+   * Push a proactive nag message with its inline keyboard (ADR 0091 M2) — mirrors pushHand's send path. The
+   * caller (TelegramNagService) builds the text + keyboard; this only owns the `this.bot` access + send.
+   */
+  async pushNag(chatId: string, text: string, keyboard: TelegramReplyMarkup): Promise<'sent' | 'no-bot' | 'error'> {
+    const bot = this.bot;
+    if (!bot) return 'no-bot';
+    try {
+      await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
+    } catch (err) {
+      this.logError('nag send failed', err);
+      return 'error';
+    }
+    return 'sent';
+  }
+
   /** True when this update comes from the single linked chat. */
   private async isBoundChat(ctx: TelegramContext): Promise<boolean> {
     const chatId = String(ctx.chat?.id ?? '');
     const { boundChatId } = await this.config.getBinding();
     return boundChatId != null && chatId === boundChatId;
+  }
+
+  /**
+   * A callback's bound chat id, or null when it isn't the linked chat (spinner cleared, no action) — the
+   * shared first stage of every callback handler (ADR 0084 gate; used by the nag buttons, ADR 0091 M2).
+   */
+  private async boundCallbackChat(ctx: TelegramContext): Promise<string | null> {
+    const chatId = String(ctx.chat?.id ?? '');
+    const { boundChatId } = await this.config.getBinding();
+    if (!boundChatId || chatId !== boundChatId) {
+      await ctx.answerCallbackQuery();
+      return null;
+    }
+    return boundChatId;
   }
 
   private async stop(): Promise<void> {

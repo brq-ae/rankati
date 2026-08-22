@@ -5,6 +5,13 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] — 2026-08-22
+
+### Added
+
+- **Telegram nag-reminders.** Any reminder can now **nudge you on Telegram until you actually do it** — not just once. Turn on **"Remind me on Telegram"** when creating or editing a reminder and pick how often to be nagged (every 30 minutes, hourly, or every 2 hours). While a reminder is due and unfinished, Rankati pings you on that cadence; each nag carries three buttons — **✓ Did it** (marks it done, exactly like tapping it in the app), **😴 Later** (snooze 1 hour, 3 hours, or until morning), and **Skip today** (quiet it for the rest of today; it comes back tomorrow if still due). Nagging respects your quiet hours and stops the moment the reminder is satisfied. It works whether or not your daily digest is on.
+- **Link a reminder to a Log.** For date-style reminders (every-N and fixed-date, not the "N times per period" kind), a new **"Log each completion"** toggle keeps a running history: tapping ✓ Did it — in the app or from a Telegram nag — also records the day in a Log named after the reminder (created automatically the first time), so you build up a track record without any extra step.
+
 ## [0.39.0] — 2026-08-21
 
 ### Added

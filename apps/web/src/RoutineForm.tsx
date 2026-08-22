@@ -25,11 +25,15 @@ const control = 'rounded-xl border border-field bg-control-bg px-2 py-1 text-sm 
 export default function RoutineForm({
   routine,
   on,
+  telegramBound,
+  serverTimezone,
   onSubmit,
   onCancel,
 }: {
   routine: Routine | null; // null = create
   on: string;
+  telegramBound: boolean; // a Telegram chat is bound (the nag scheduler's floor, with a timezone)
+  serverTimezone: string | null; // the digest/nag timezone, or null when unset
   onSubmit: (dto: CreateRoutineDto | UpdateRoutineDto, id: string | null) => void;
   onCancel: () => void;
 }) {
@@ -54,6 +58,11 @@ export default function RoutineForm({
   const [ordinal, setOrdinal] = useState(routine?.ruleOrdinal ?? 1);
   const [ruleWeekday, setRuleWeekday] = useState(routine?.ruleWeekday ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState(routine?.ruleDayOfMonth ?? 1);
+  // Telegram nag-reminders (ADR 0091 M2). The nag toggle applies to ANY type; the log-link is
+  // non-frequency only (a multi-per-day frequency can't map to a single dated Log entry).
+  const [telegramNag, setTelegramNag] = useState(routine?.telegramNag ?? false);
+  const [nagIntervalMinutes, setNagIntervalMinutes] = useState(routine?.nagIntervalMinutes ?? 60);
+  const [linkLog, setLinkLog] = useState(routine?.linkedLogId != null);
 
   const buildRule = (): FixedRule => {
     if (ruleKind === 'nth_weekday_of_month') return { kind: 'nth_weekday_of_month', ordinal, weekday: ruleWeekday };
@@ -71,14 +80,17 @@ export default function RoutineForm({
   const submit = () => {
     const n = name.trim();
     if (!n) return;
+    // Nag fields ride onto both create and edit; log-link is non-frequency only.
+    const nag = telegramNag ? { telegramNag: true, nagIntervalMinutes } : {};
+    const wantLink = type !== 'frequency' && linkLog;
     if (!editing) {
-      const base = { name: n, type, on };
+      const base = { name: n, type, on, ...nag };
       const dto: CreateRoutineDto =
         type === 'frequency'
           ? { ...base, periodUnit, targetCount }
           : type === 'interval_floating'
-            ? { ...base, intervalUnit, intervalCount, preferredWeekday, firstDue: due || undefined }
-            : { ...base, rule: buildRule() };
+            ? { ...base, intervalUnit, intervalCount, preferredWeekday, firstDue: due || undefined, ...(wantLink ? { linkLog: true } : {}) }
+            : { ...base, rule: buildRule(), ...(wantLink ? { linkLog: true } : {}) };
       onSubmit(dto, null);
       return;
     }
@@ -97,10 +109,26 @@ export default function RoutineForm({
     } else if (!sameRule(r)) {
       dto.rule = buildRule();
     }
+    // Nag toggle (any type); only send the cadence while nagging is on.
+    if (telegramNag !== (r.telegramNag ?? false)) dto.telegramNag = telegramNag;
+    if (telegramNag && nagIntervalMinutes !== r.nagIntervalMinutes) dto.nagIntervalMinutes = nagIntervalMinutes;
+    // Log-link (non-frequency only) — compare intent to the current linked state.
+    if (r.type !== 'frequency' && linkLog !== (r.linkedLogId != null)) dto.linkLog = linkLog;
     onSubmit(dto, r.id);
   };
 
   const num = (v: string, min: number) => Math.max(min, Number(v) || min);
+
+  // A nag fires only when a Telegram chat is bound AND a timezone is set (the scheduler's gate, ADR
+  // 0091 M2). If the toggle is on but either is missing, the reminder silently never fires — so warn,
+  // naming exactly what's missing.
+  const nagBlocked = telegramNag && (!telegramBound || !serverTimezone);
+  const nagWarning =
+    !telegramBound && !serverTimezone
+      ? 'Reminders need your Telegram bot connected and a timezone set (Settings → Telegram).'
+      : !telegramBound
+        ? 'Reminders need your Telegram bot connected (Settings → Telegram).'
+        : 'Reminders need a timezone set (Settings → Telegram).';
 
   return (
     <dialog
@@ -202,6 +230,52 @@ export default function RoutineForm({
             )}
           </div>
         )}
+
+        <div className="flex flex-col gap-2 border-t border-field pt-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={telegramNag}
+              onChange={(e) => setTelegramNag(e.target.checked)}
+              aria-label="Remind me on Telegram"
+              className="h-4 w-4 accent-primary"
+            />
+            <span className="text-sm">Remind me on Telegram</span>
+          </label>
+          {telegramNag && (
+            <label className="ml-6 flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted">Nag me every</span>
+              <select
+                value={nagIntervalMinutes}
+                onChange={(e) => setNagIntervalMinutes(Number(e.target.value))}
+                aria-label="Nag frequency"
+                className={`${control} w-40`}
+              >
+                <option value={30}>30 minutes</option>
+                <option value={60}>1 hour</option>
+                <option value={120}>2 hours</option>
+                <option value={1}>1 minute (testing)</option>
+              </select>
+            </label>
+          )}
+          {nagBlocked && (
+            <p role="alert" className="ml-6 text-xs text-error">
+              ⚠️ {nagWarning}
+            </p>
+          )}
+          {type !== 'frequency' && (
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={linkLog}
+                onChange={(e) => setLinkLog(e.target.checked)}
+                aria-label="Log each completion"
+                className="h-4 w-4 accent-primary"
+              />
+              <span className="text-sm">Log each completion (to a Log named after this routine)</span>
+            </label>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => dialogRef.current?.close()} className="touch-manipulation rounded-xl px-3 py-1.5 text-sm text-muted hover:bg-hover">

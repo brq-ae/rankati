@@ -8,6 +8,7 @@ import type {
 } from '@rankati/shared';
 import { LOCAL_OWNER_ID } from '../constants';
 import type { Routine } from '../generated/prisma/client';
+import { LogsService } from '../logs.service';
 import { PrismaService } from '../prisma.service';
 import {
   addDays,
@@ -23,6 +24,18 @@ const requireDay = (v: unknown, field: string): string => {
   return v;
 };
 const dateStr = (d: Date | null): string | null => (d === null ? null : d.toISOString().slice(0, 10));
+
+/** The nag cadences a routine may carry (minutes) — 1 is the urgent/testing value (ADR 0091 M2). */
+const NAG_INTERVALS = [1, 30, 60, 120];
+
+/** A nag-enabled routine + its computed nag state (ADR 0091 M2) — the scheduler's read shape. */
+export interface NaggableRoutine {
+  row: Routine;
+  /** Due AND unsatisfied for the current period (nag-due == app-due, from `toDto`). */
+  shouldNag: boolean;
+  /** Frequency progress ("count/target today"), or null for the interval types. */
+  progress: { count: number; target: number } | null;
+}
 /** A `YYYY-MM-DD` from the schedule module → the UTC-midnight `Date` a `@db.Date` column expects. */
 const toDate = (day: string): Date => new Date(`${day}T00:00:00.000Z`);
 
@@ -41,7 +54,49 @@ function ruleFromRow(r: Routine): FixedRule {
  */
 @Injectable()
 export class RoutinesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly logs: LogsService,
+  ) {}
+
+  /**
+   * Resolve the Telegram-nag columns (ADR 0091 M2) from a create/update dto against the CURRENT state.
+   * Enabling nagging without a cadence defaults to 60m; disabling clears the cadence. Rejects a bad cadence.
+   */
+  private resolveNag(
+    dto: { telegramNag?: boolean; nagIntervalMinutes?: number },
+    current: { telegramNag: boolean; nagIntervalMinutes: number | null },
+  ): { telegramNag: boolean; nagIntervalMinutes: number | null } {
+    if (dto.telegramNag !== undefined && typeof dto.telegramNag !== 'boolean') {
+      throw new BadRequestException('telegramNag must be a boolean');
+    }
+    if (dto.nagIntervalMinutes !== undefined && !NAG_INTERVALS.includes(dto.nagIntervalMinutes)) {
+      throw new BadRequestException(`nagIntervalMinutes must be one of ${NAG_INTERVALS.join(', ')}`);
+    }
+    const telegramNag = dto.telegramNag ?? current.telegramNag;
+    let nagIntervalMinutes = dto.nagIntervalMinutes ?? current.nagIntervalMinutes;
+    if (telegramNag) nagIntervalMinutes = nagIntervalMinutes ?? 60; // enabling → default cadence
+    else nagIntervalMinutes = null; // off → clear the cadence (and the scheduler ignores it)
+    return { telegramNag, nagIntervalMinutes };
+  }
+
+  /**
+   * Resolve the reminder→log link (ADR 0091 M2) — a NAME-BASED toggle: `linkLog: true` find-or-creates a
+   * Log named after the routine (case-insensitive) and returns its id; `false` unlinks (never deletes the
+   * Log); `undefined` = no change. Non-frequency only — the caller rejects it on a frequency routine.
+   * Returns `undefined` when nothing changes so the caller omits the column from the write.
+   */
+  private async resolveLinkedLogId(
+    linkLog: boolean | undefined,
+    name: string,
+    current: string | null,
+  ): Promise<string | null | undefined> {
+    if (linkLog === undefined) return undefined;
+    if (!linkLog) return null; // unlink, keep the Log
+    if (current) return current; // already linked
+    const log = await this.logs.findOrCreateByName(name);
+    return log.id;
+  }
 
   /** Map a stored row to the wire DTO, computing the fresh display state against `on`. */
   private toDto(r: Routine, on: string): RoutineDto {
@@ -67,6 +122,10 @@ export class RoutinesService {
       ruleWeekday: r.ruleWeekday,
       ruleDayOfMonth: r.ruleDayOfMonth,
       acknowledgedDate: dateStr(r.acknowledgedDate),
+      // Telegram nag-reminders (ADR 0091 M2) — carried on reads; lastNaggedAt/nagSkipUntil stay server-only.
+      telegramNag: r.telegramNag,
+      nagIntervalMinutes: r.nagIntervalMinutes,
+      linkedLogId: r.linkedLogId,
     };
     if (r.type === 'frequency') {
       // Compute-fresh-per-read (0059): when the period has rolled, BOTH the count and the start
@@ -93,6 +152,40 @@ export class RoutinesService {
       orderBy: { createdAt: 'asc' },
     });
     return rows.map((r) => this.toDto(r, onStr));
+  }
+
+  /**
+   * The Telegram-nag scheduler's read (ADR 0091 M2): every `telegramNag` routine with its RAW row (for the
+   * server-only nag fields — lastNaggedAt/nagSkipUntil/snoozedUntil/nagIntervalMinutes/linkedLogId) plus
+   * `shouldNag` = "due AND unsatisfied for the current period" and the frequency `progress`. `shouldNag`
+   * is derived from `toDto(row, on)` — the SAME fresh state the app reads — so NAG-DUE == APP-DUE by
+   * construction (no second due implementation). The snooze/skip/cadence/quiet gates are the caller's.
+   */
+  async naggable(on: string): Promise<NaggableRoutine[]> {
+    const rows = await this.prisma.routine.findMany({
+      where: { ownerId: LOCAL_OWNER_ID, telegramNag: true },
+    });
+    return rows.map((row) => {
+      const dto = this.toDto(row, on); // the app's exact display state — the single due source
+      let shouldNag = false;
+      let progress: { count: number; target: number } | null = null;
+      if (row.type === 'frequency') {
+        const count = dto.periodCount ?? 0;
+        const target = dto.targetCount ?? 0;
+        progress = { count, target };
+        shouldNag = count < target; // under the per-period target → still due
+      } else if (row.type === 'interval_floating') {
+        shouldNag = dto.nextDue !== null && dto.nextDue <= on; // due today or overdue
+      } else {
+        shouldNag = dto.nextDue === on; // fixed: today IS the (unacknowledged) occurrence
+      }
+      return { row, shouldNag, progress };
+    });
+  }
+
+  /** Stamp when a routine was last nagged — the cadence anchor (ADR 0091 M2). */
+  async markNagged(id: string, at: Date): Promise<void> {
+    await this.prisma.routine.update({ where: { id }, data: { lastNaggedAt: at } });
   }
 
   async create(dto: CreateRoutineDto): Promise<RoutineDto> {
@@ -132,8 +225,23 @@ export class RoutinesService {
       throw new BadRequestException('type must be frequency, interval_floating or interval_fixed');
     }
 
+    // Telegram nag fields (ADR 0091 M2) — apply to any type. The log link is non-frequency only.
+    const nag = this.resolveNag(dto, { telegramNag: false, nagIntervalMinutes: null });
+    if (dto.linkLog !== undefined && dto.type === 'frequency') {
+      throw new BadRequestException('linkLog is not available on a frequency routine');
+    }
+    const linkedLogId = await this.resolveLinkedLogId(dto.linkLog, name, null);
+
     const row = await this.prisma.routine.create({
-      data: { name, ownerId: LOCAL_OWNER_ID, type: dto.type, ...data },
+      data: {
+        name,
+        ownerId: LOCAL_OWNER_ID,
+        type: dto.type,
+        ...data,
+        telegramNag: nag.telegramNag,
+        nagIntervalMinutes: nag.nagIntervalMinutes,
+        ...(linkedLogId !== undefined ? { linkedLogId } : {}),
+      },
     });
     return this.toDto(row, on);
   }
@@ -187,7 +295,7 @@ export class RoutinesService {
     }
 
     if (row.type === 'frequency') {
-      this.rejectForeign(dto, ['intervalUnit', 'intervalCount', 'preferredWeekday', 'nextDue', 'rule']);
+      this.rejectForeign(dto, ['intervalUnit', 'intervalCount', 'preferredWeekday', 'nextDue', 'rule', 'linkLog']);
       if (dto.targetCount !== undefined) {
         if (!Number.isInteger(dto.targetCount) || dto.targetCount < 1) {
           throw new BadRequestException('targetCount must be a positive integer');
@@ -237,6 +345,21 @@ export class RoutinesService {
         );
       }
     }
+
+    // Telegram nag fields (ADR 0091 M2) — any type; only touch the columns when a nag field is actually
+    // sent, so an unrelated edit doesn't rewrite them (the empty-diff guard stays honest).
+    if (dto.telegramNag !== undefined || dto.nagIntervalMinutes !== undefined) {
+      const nag = this.resolveNag(dto, { telegramNag: row.telegramNag, nagIntervalMinutes: row.nagIntervalMinutes });
+      data.telegramNag = nag.telegramNag;
+      data.nagIntervalMinutes = nag.nagIntervalMinutes;
+    }
+    // The log link (non-frequency — rejected above on frequency). Uses the new name if it's being changed.
+    const linkedLogId = await this.resolveLinkedLogId(
+      dto.linkLog,
+      (data.name as string | undefined) ?? row.name,
+      row.linkedLogId,
+    );
+    if (linkedLogId !== undefined) data.linkedLogId = linkedLogId;
 
     if (Object.keys(data).length === 0) return this.toDto(row, on);
     const updated = await this.prisma.routine.update({ where: { id: row.id }, data });
@@ -308,5 +431,37 @@ export class RoutinesService {
     // `on` for the DTO recompute: the snoozed-until day is a harmless reference; the fields that need
     // a real `on` (frequency count, fixed next-due) are re-derived by the next findAll anyway.
     return this.toDto(updated, until.slice(0, 10));
+  }
+
+  /**
+   * "✓ Did it" from a Telegram nag (ADR 0091 M2): satisfy by type — frequency/floating via `did`, fixed
+   * via `dismiss` — and, if the routine links a Log, also record today there via `logs.did`. GRACEFUL on a
+   * DELETED linked Log (the id is soft/unconstrained): an owner-scoped 404 is swallowed so the routine is
+   * still satisfied, never a crash.
+   */
+  async nagDid(id: string, on?: string): Promise<RoutineDto> {
+    const onStr = requireDay(on, 'on');
+    const row = await this.own(id); // 404 if foreign/stale
+    const dto = row.type === 'interval_fixed' ? await this.dismiss(id, onStr) : await this.did(id, onStr);
+    if (row.linkedLogId) {
+      try {
+        await this.logs.did(row.linkedLogId, onStr);
+      } catch (err) {
+        if (!(err instanceof NotFoundException)) throw err; // a deleted linked Log → skip; still satisfied
+      }
+    }
+    return dto;
+  }
+
+  /**
+   * "Skip today" from a nag (ADR 0091 M2): mute ONLY the nag until `until`, leaving the routine visible in
+   * the app (distinct from `snooze`, the display hide). The caller passes the next-local-day instant.
+   */
+  async setNagSkip(id: string, until: string): Promise<void> {
+    if (typeof until !== 'string' || Number.isNaN(Date.parse(until))) {
+      throw new BadRequestException('until must be an ISO date-time');
+    }
+    await this.own(id); // 404 if foreign/stale
+    await this.prisma.routine.update({ where: { id }, data: { nagSkipUntil: new Date(until) } });
   }
 }

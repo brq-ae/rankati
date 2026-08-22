@@ -154,6 +154,74 @@ export function decodeListPick(data: string): string | null {
   }
 }
 
+// ── Nag-reminder buttons (ADR 0091 M2) — ✓ Did it / 😴 Later / Skip today ─────────────────────────────
+// Each carries a ROUTINE id (packed identically to a task id). Distinct prefixes g:/w:/k: (m d x s l taken).
+
+const NAG_DID_PREFIX = 'g:';
+const NAG_LATER_PREFIX = 'w:';
+const NAG_SKIP_PREFIX = 'k:';
+
+/** Triggers the transport routes the three nag buttons on. */
+export const NAG_DID_TRIGGER = /^g:/;
+export const NAG_LATER_TRIGGER = /^w:/;
+export const NAG_SKIP_TRIGGER = /^k:/;
+
+/** A single-UUID nag payload: "<prefix>" + base64url(routineId) = 24 bytes. */
+function encodeNag(prefix: string, routineId: string): string {
+  return `${prefix}${uuidToToken(routineId)}`;
+}
+/** Unpack a single-UUID nag payload → the routine id, or null if malformed. */
+function decodeNag(prefix: string, data: string): string | null {
+  if (!data.startsWith(prefix)) return null;
+  const body = data.slice(prefix.length);
+  if (body.length !== TOKEN_LEN) return null;
+  try {
+    return tokenToUuid(body);
+  } catch {
+    return null;
+  }
+}
+
+/** ✓ Did it — record + satisfy for the period (and write the linked Log if any). */
+export const encodeNagDid = (routineId: string): string => encodeNag(NAG_DID_PREFIX, routineId);
+export const decodeNagDid = (data: string): string | null => decodeNag(NAG_DID_PREFIX, data);
+
+/** 😴 Later — opens the 1h / 3h / until-morning span submenu (the span codec is added with that handler). */
+export const encodeNagLater = (routineId: string): string => encodeNag(NAG_LATER_PREFIX, routineId);
+export const decodeNagLater = (data: string): string | null => decodeNag(NAG_LATER_PREFIX, data);
+
+/** Skip today — mute the nag until the next due period, without recording. */
+export const encodeNagSkip = (routineId: string): string => encodeNag(NAG_SKIP_PREFIX, routineId);
+export const decodeNagSkip = (data: string): string | null => decodeNag(NAG_SKIP_PREFIX, data);
+
+/** 😴 Later's chosen span: 1 hour / 3 hours / until morning. */
+export type NagSnoozeSpan = 'hour' | 'threeHours' | 'morning';
+const NAG_SNOOZE_PREFIX = 'y:';
+const SPAN_CHAR: Record<NagSnoozeSpan, string> = { hour: 'h', threeHours: 't', morning: 'm' };
+const CHAR_SPAN: Record<string, NagSnoozeSpan> = { h: 'hour', t: 'threeHours', m: 'morning' };
+
+/** The regex the transport routes the span sub-buttons on. */
+export const NAG_SNOOZE_TRIGGER = /^y:/;
+
+/** Pack a span sub-button: "y:" + span char(1) + base64url(routineId) = 25 bytes. */
+export function encodeNagSnooze(routineId: string, span: NagSnoozeSpan): string {
+  return `${NAG_SNOOZE_PREFIX}${SPAN_CHAR[span]}${uuidToToken(routineId)}`;
+}
+
+/** Unpack a span sub-button → { routineId, span }, or null if malformed. */
+export function decodeNagSnooze(data: string): { routineId: string; span: NagSnoozeSpan } | null {
+  if (!data.startsWith(NAG_SNOOZE_PREFIX)) return null;
+  const body = data.slice(NAG_SNOOZE_PREFIX.length);
+  if (body.length !== 1 + TOKEN_LEN) return null;
+  const span = CHAR_SPAN[body[0]!];
+  if (!span) return null;
+  try {
+    return { routineId: tokenToUuid(body.slice(1)), span };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The lists offered as re-file buttons (ADR 0084): the input is already alphabetical (ListsService.findAll
  * orders by name, matching the web app). Drop the Inbox itself and cap the count; return what to show plus

@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeDiscard,
   decodeDone,
+  decodeNagDid,
+  decodeNagLater,
+  decodeNagSkip,
   decodePinSnooze,
   decodeRefile,
   encodeDiscard,
   encodeDone,
+  encodeNagDid,
+  encodeNagLater,
+  encodeNagSkip,
   encodePinSnooze,
   encodeRefile,
   REFILE_BUTTON_CAP,
@@ -120,5 +126,30 @@ describe('selectRefileLists (ADR 0084)', () => {
     const { shown, total } = selectRefileLists(lists, 'inbox');
     expect(shown.map((l) => l.name)).toEqual(['A', 'B']);
     expect(total).toBe(2);
+  });
+});
+
+describe('nag-button callback_data codecs (ADR 0091 M2)', () => {
+  it('each round-trips a routine id and stays under 64 bytes', () => {
+    for (const [enc, dec] of [
+      [encodeNagDid, decodeNagDid],
+      [encodeNagLater, decodeNagLater],
+      [encodeNagSkip, decodeNagSkip],
+    ] as const) {
+      expect(dec(enc(A))).toBe(A);
+      expect(dec(enc(B))).toBe(B);
+      expect(enc(A).length).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('each rejects a foreign prefix or malformed body (null, never a wrong id)', () => {
+    // wrong prefix
+    expect(decodeNagDid(encodeNagLater(A))).toBeNull(); // w: is not g:
+    expect(decodeNagLater(encodeNagSkip(A))).toBeNull(); // k: is not w:
+    expect(decodeNagSkip(encodeNagDid(A))).toBeNull(); // g: is not k:
+    expect(decodeNagDid(encodeDiscard(A))).toBeNull(); // an x: payload is not a nag
+    // malformed
+    expect(decodeNagDid('g:short')).toBeNull();
+    expect(decodeNagLater('')).toBeNull();
   });
 });

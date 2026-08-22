@@ -593,6 +593,13 @@ export interface Routine {
   ruleWeekday: number | null;
   ruleDayOfMonth: number | null;
   acknowledgedDate: string | null;
+  // Telegram nag-reminders (ADR 0091 M2). `lastNaggedAt`/`nagSkipUntil` are server-only and NOT carried.
+  /** Opt-in Telegram nagging while due + unsatisfied. */
+  telegramNag: boolean;
+  /** Nag cadence in minutes (1 / 30 / 60 / 120), or null when nagging is off. */
+  nagIntervalMinutes: number | null;
+  /** The linked Log's id (≤1/day routines only), or null. The form reads this as the link toggle's state. */
+  linkedLogId: string | null;
 }
 
 /**
@@ -612,6 +619,11 @@ export interface CreateRoutineDto {
   preferredWeekday?: number | null;
   firstDue?: string;
   rule?: FixedRule;
+  // Telegram nag-reminders (ADR 0091 M2) — apply to ANY type; `linkLog` is a NAME-BASED toggle (the
+  // server find-or-creates a Log named after the routine and stores its id), valid only for non-frequency.
+  telegramNag?: boolean;
+  nagIntervalMinutes?: number;
+  linkLog?: boolean;
 }
 
 /**
@@ -632,6 +644,11 @@ export interface UpdateRoutineDto {
   preferredWeekday?: number | null;
   nextDue?: string;
   rule?: FixedRule;
+  // Telegram nag-reminders (ADR 0091 M2) — any type; `linkLog` (name-based toggle) is non-frequency only
+  // (rejected on a frequency routine, like the other foreign fields).
+  telegramNag?: boolean;
+  nagIntervalMinutes?: number;
+  linkLog?: boolean;
 }
 
 /** POST /routines/:id/did and /dismiss — carry the client's local day (0052), like the Today reads. */

@@ -124,6 +124,23 @@ export class LogsService {
     return this.toDto(row, dayStr(row.createdAt), true);
   }
 
+  /**
+   * Find the owner's Log named `name` (CASE-INSENSITIVE), or create it — the reminder→log link (ADR 0091):
+   * enabling the link on a routine reuses an existing same-named Log ("Haircut" = "haircut") rather than
+   * spawning a duplicate. Mirrors the Telegram Inbox find-or-create. Returns just the id (the caller stores it).
+   */
+  async findOrCreateByName(name: string): Promise<{ id: string; name: string }> {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) throw new BadRequestException('name is required');
+    const existing = await this.prisma.log.findFirst({
+      where: { ownerId: LOCAL_OWNER_ID, name: { equals: trimmed, mode: 'insensitive' } },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    if (existing) return existing;
+    return this.prisma.log.create({ data: { name: trimmed, ownerId: LOCAL_OWNER_ID }, select: { id: true, name: true } });
+  }
+
   async rename(id: string, dto: UpdateLogDto, on?: string): Promise<LogDto> {
     const onStr = requireDay(on, 'on');
     const name = typeof dto?.name === 'string' ? dto.name.trim() : '';

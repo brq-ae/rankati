@@ -4,27 +4,15 @@ import { CLOCK, type Clock } from '../auth/clock';
 import { SettingsService } from '../settings.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramConfigService } from './telegram-config.service';
+import { TelegramNagService } from './telegram-nag.service';
 
 /** How long after digestTime a missed digest may still fire (Step 7) — a boot at 08:15 delivers; noon skips. */
 const GRACE_MINUTES = 120;
 const TICK_MS = 60_000;
 
-/** The local date + minute-of-day of a moment in an IANA timezone (DST handled by Intl). */
-export function localNow(now: Date, timeZone: string): { date: string; minutes: number } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(now);
-  const g: Record<string, string> = {};
-  for (const p of parts) g[p.type] = p.value;
-  const hour = g.hour === '24' ? 0 : Number(g.hour); // hour12:false can render midnight as "24"
-  return { date: `${g.year}-${g.month}-${g.day}`, minutes: hour * 60 + Number(g.minute) };
-}
+// localNow moved to ./telegram-time (shared with the nag pass) — re-exported so existing importers keep working.
+export { localNow } from './telegram-time';
+import { localNow } from './telegram-time';
 
 /** "HH:MM" → minutes since local midnight, or null if malformed. */
 function parseHhMm(s: string): number | null {
@@ -49,6 +37,7 @@ export class TelegramDigestService implements OnModuleDestroy {
     private readonly config: TelegramConfigService,
     private readonly bot: TelegramBotService,
     private readonly settings: SettingsService,
+    private readonly nags: TelegramNagService,
   ) {}
 
   /** Start the per-minute loop. Called from main.ts after listen, so the test harness never opens it. */
@@ -81,9 +70,16 @@ export class TelegramDigestService implements OnModuleDestroy {
     this.ticking = true;
     try {
       const s = await this.config.getDigestState();
-      if (!s.enabled || !s.boundChatId || !s.timezone) return;
+      if (!s.boundChatId || !s.timezone) return; // nothing bound / no tz → no push of any kind
 
       const local = localNow(this.clock.now(), s.timezone);
+
+      // Nag pass (ADR 0091 M2) — runs EVERY tick regardless of the digest toggle (nagging is per-routine,
+      // not tied to the daily digest); it self-gates on quiet-hours and never throws.
+      await this.nags.evaluate(local, s.boundChatId);
+
+      // Digest pass — only when the daily digest is enabled.
+      if (!s.enabled) return;
       if (s.lastSentOn === local.date) return; // already sent today
 
       const target = parseHhMm(s.time);

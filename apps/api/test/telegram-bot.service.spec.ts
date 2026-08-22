@@ -10,6 +10,10 @@ import {
   encodeDiscard,
   encodeDone,
   encodeListPick,
+  encodeNagDid,
+  encodeNagLater,
+  encodeNagSkip,
+  encodeNagSnooze,
   encodePinSnooze,
   encodeRefile,
 } from '../src/telegram/telegram-callback';
@@ -52,6 +56,7 @@ const TOKEN_A = '111111111:AAA-token-a_abcdefghijklmnopqrst';
 const TOKEN_B = '222222222:BBB-token-b_abcdefghijklmnopqrst';
 const TASK_ID = '11111111-2222-3333-4444-555555555555';
 const LIST_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const ROUTINE_ID = '99999999-8888-7777-6666-555555555555';
 
 describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   let created: FakeBot[];
@@ -183,6 +188,27 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     },
   } as unknown as PinSnoozeService;
 
+  // Nag button actions (ADR 0091 M2) — the handlers delegate here; recorded so we assert routing + gating.
+  const nagDidCalls: string[] = [];
+  const nagSnoozeCalls: { id: string; span: string }[] = [];
+  const nagSkipCalls: string[] = [];
+  let nagResult: string | null;
+  const mockNagActions = {
+    handleDid: async (id: string) => {
+      nagDidCalls.push(id);
+      return nagResult;
+    },
+    handleSnooze: async (id: string, span: string) => {
+      nagSnoozeCalls.push({ id, span });
+      return nagResult;
+    },
+    handleSkip: async (id: string) => {
+      nagSkipCalls.push(id);
+      return nagResult;
+    },
+    laterMenu: (id: string) => ({ inline_keyboard: [[{ text: '1 hour', callback_data: `y:h${id}` }]] }),
+  } as unknown as import('../src/telegram/telegram-nag-actions.service').TelegramNagActionsService;
+
   const aTask = (title: string): CaptureResult['task'] =>
     ({ id: TASK_ID, title, listId: 'inbox', needsDetails: true }) as unknown as CaptureResult['task'];
   const card = (id: string, title: string): Task =>
@@ -217,7 +243,11 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     routinesResult = { status: 'ok', on: '2026-07-30', routines: [] };
     logsResult = { hasTimezone: true, logs: [] };
     setCommandsThrows = false;
-    service = new TelegramBotService(mockConfig, mockCapture, mockRead, mockPinSnooze, factory);
+    nagDidCalls.length = 0;
+    nagSnoozeCalls.length = 0;
+    nagSkipCalls.length = 0;
+    nagResult = '✓ Walk — done';
+    service = new TelegramBotService(mockConfig, mockCapture, mockRead, mockPinSnooze, mockNagActions, factory);
   });
 
   // --- fire a captured handler with a synthetic update; collect every outbound effect ---
@@ -540,6 +570,62 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     const { rec } = await fireCallback(bot, 42, 'x:short');
     expect(discardCalls).toHaveLength(0);
     expect(rec.answers[0]).toContain('no longer valid');
+  });
+
+  // ---------------------------------------------------------------- nag buttons (ADR 0091 M2)
+  it('✓ Did it (bound) calls handleDid and drops the keyboard with the confirmation', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, encodeNagDid(ROUTINE_ID));
+    expect(nagDidCalls).toEqual([ROUTINE_ID]);
+    expect(rec.answers[0]).toBe('✓ Walk — done');
+    expect(rec.edits[0]).toBe('✓ Walk — done');
+  });
+
+  it('😴 Later (bound) re-renders to the span submenu, taking NO action yet', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, encodeNagLater(ROUTINE_ID));
+    expect(rec.edits[0]).toContain('Remind you again');
+    expect(nagSnoozeCalls).toEqual([]); // no snooze until a span is picked
+  });
+
+  it('a span sub-button (bound) snoozes for that span', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCallback(bot, 42, encodeNagSnooze(ROUTINE_ID, 'threeHours'));
+    expect(nagSnoozeCalls).toEqual([{ id: ROUTINE_ID, span: 'threeHours' }]);
+  });
+
+  it('Skip today (bound) calls handleSkip', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCallback(bot, 42, encodeNagSkip(ROUTINE_ID));
+    expect(nagSkipCalls).toEqual([ROUTINE_ID]);
+  });
+
+  it('a nag button from a FOREIGN chat is ignored (no action)', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCallback(bot, 999, encodeNagDid(ROUTINE_ID));
+    expect(nagDidCalls).toEqual([]);
+  });
+
+  it('a malformed nag payload answers cleanly, no action', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, 'g:short');
+    expect(nagDidCalls).toEqual([]);
+    expect(rec.answers[0]).toContain('no longer valid');
+  });
+
+  it('a ✓ Did it with no timezone set tells the owner to set one, no crash', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    nagResult = null; // handleDid returns null when no tz
+    const bot = await startedBot();
+    const { rec } = await fireCallback(bot, 42, encodeNagDid(ROUTINE_ID));
+    expect(rec.answers[0]).toContain('timezone');
+    expect(rec.edits).toHaveLength(0);
   });
 
   // ---------------------------------------------------------------- read commands (Step 6)
