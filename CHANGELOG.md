@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.1] — 2026-08-22
+
+### Changed
+
+- **Telegram nag reminders now take any interval, not just presets.** When you turn on "Remind me on Telegram" for a reminder, you can set how often to be nagged to **any whole number of minutes or hours** — every 10 minutes, every 45 minutes, every 3 hours, up to once a day — instead of choosing from a fixed list. Existing reminders keep their current interval.
+
 ## [0.41.0] — 2026-08-22
 
 ### Added

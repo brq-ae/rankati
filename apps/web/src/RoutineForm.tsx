@@ -61,7 +61,15 @@ export default function RoutineForm({
   // Telegram nag-reminders (ADR 0091 M2). The nag toggle applies to ANY type; the log-link is
   // non-frequency only (a multi-per-day frequency can't map to a single dated Log entry).
   const [telegramNag, setTelegramNag] = useState(routine?.telegramNag ?? false);
-  const [nagIntervalMinutes, setNagIntervalMinutes] = useState(routine?.nagIntervalMinutes ?? 60);
+  // Custom nag cadence (v0.41.1): a count + minutes/hours unit, mirroring the frequency "Times per" control.
+  // Init from the stored minutes — an exact ≥60 multiple of 60 shows as hours, else minutes (90 → "90 minutes").
+  const initialNagMinutes = routine?.nagIntervalMinutes ?? 60; // default: 1 hour
+  const initialNagUnit: 'minutes' | 'hours' =
+    initialNagMinutes >= 60 && initialNagMinutes % 60 === 0 ? 'hours' : 'minutes';
+  const [nagCount, setNagCount] = useState(initialNagUnit === 'hours' ? initialNagMinutes / 60 : initialNagMinutes);
+  const [nagUnit, setNagUnit] = useState<'minutes' | 'hours'>(initialNagUnit);
+  // Belt: derived minutes always clamped to the server's 1..1440 range regardless of the raw count.
+  const nagIntervalMinutes = Math.min(1440, Math.max(1, nagUnit === 'hours' ? nagCount * 60 : nagCount));
   const [linkLog, setLinkLog] = useState(routine?.linkedLogId != null);
 
   const buildRule = (): FixedRule => {
@@ -243,20 +251,34 @@ export default function RoutineForm({
             <span className="text-sm">Remind me on Telegram</span>
           </label>
           {telegramNag && (
-            <label className="ml-6 flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted">Nag me every</span>
+            <div className="ml-6 flex items-end gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted">Nag me every</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={nagUnit === 'hours' ? 24 : 1440}
+                  value={nagCount}
+                  onChange={(e) => setNagCount(Math.min(nagUnit === 'hours' ? 24 : 1440, num(e.target.value, 1)))}
+                  aria-label="Nag interval"
+                  className={`${field} w-20`}
+                />
+              </label>
               <select
-                value={nagIntervalMinutes}
-                onChange={(e) => setNagIntervalMinutes(Number(e.target.value))}
-                aria-label="Nag frequency"
-                className={`${control} w-40`}
+                value={nagUnit}
+                onChange={(e) => {
+                  const u = e.target.value as 'minutes' | 'hours';
+                  setNagUnit(u);
+                  // Re-cap the count to the new unit's max so the derived minutes stays ≤ 1440.
+                  setNagCount((c) => Math.min(u === 'hours' ? 24 : 1440, Math.max(1, c)));
+                }}
+                aria-label="Nag interval unit"
+                className={control}
               >
-                <option value={30}>30 minutes</option>
-                <option value={60}>1 hour</option>
-                <option value={120}>2 hours</option>
-                <option value={1}>1 minute (testing)</option>
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
               </select>
-            </label>
+            </div>
           )}
           {nagBlocked && (
             <p role="alert" className="ml-6 text-xs text-error">

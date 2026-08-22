@@ -162,11 +162,14 @@ describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
     await screen.findByLabelText('Routine name');
   };
 
-  it('the nag-frequency picker is hidden until "Remind me on Telegram" is on', async () => {
+  it('the nag-interval control is hidden until "Remind me on Telegram" is on; default 1 hour', async () => {
     await openNew();
-    expect(screen.queryByLabelText('Nag frequency')).toBeNull();
+    expect(screen.queryByLabelText('Nag interval')).toBeNull();
     fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
-    expect(screen.getByLabelText('Nag frequency')).not.toBeNull(); // revealed
+    const count = screen.getByLabelText('Nag interval') as HTMLInputElement; // revealed
+    const unit = screen.getByLabelText('Nag interval unit') as HTMLSelectElement;
+    expect(count.value).toBe('1'); // default: 1 hour
+    expect(unit.value).toBe('hours');
   });
 
   it('the log-link toggle is hidden for frequency, shown for non-frequency types', async () => {
@@ -181,7 +184,8 @@ describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
     fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Water plants' } });
     fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
     fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
-    fireEvent.change(screen.getByLabelText('Nag frequency'), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText('Nag interval unit'), { target: { value: 'minutes' } });
+    fireEvent.change(screen.getByLabelText('Nag interval'), { target: { value: '30' } });
     fireEvent.click(screen.getByLabelText('Log each completion'));
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() =>
@@ -190,10 +194,36 @@ describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
           name: 'Water plants',
           type: 'interval_floating',
           telegramNag: true,
-          nagIntervalMinutes: 30,
+          nagIntervalMinutes: 30, // minutes unit → count as-is
           linkLog: true,
         }),
       ),
+    );
+  });
+
+  it('the hours unit multiplies by 60 (every 3 hours → 180)', async () => {
+    await openNew();
+    fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Stretch' } });
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
+    // unit defaults to hours; set count 3 → 180 minutes
+    fireEvent.change(screen.getByLabelText('Nag interval'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(api.createRoutine).toHaveBeenCalledWith(expect.objectContaining({ nagIntervalMinutes: 180 })),
+    );
+  });
+
+  it('a cleared/NaN interval input does not send NaN — coerces to the min (1)', async () => {
+    await openNew();
+    fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Edge' } });
+    fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
+    fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
+    fireEvent.change(screen.getByLabelText('Nag interval unit'), { target: { value: 'minutes' } });
+    fireEvent.change(screen.getByLabelText('Nag interval'), { target: { value: '' } }); // cleared
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(api.createRoutine).toHaveBeenCalledWith(expect.objectContaining({ nagIntervalMinutes: 1 })),
     );
   });
 
@@ -208,16 +238,29 @@ describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
     expect(dto).not.toHaveProperty('linkLog');
   });
 
-  it('editing an already-nagging routine sends only the changed cadence', async () => {
+  it('editing an already-nagging routine sends only the changed cadence (60→2h=120)', async () => {
     vi.mocked(api.getRoutines).mockResolvedValue([
       floating({ id: 'n1', name: 'Vitamins', nextDue: '2026-01-20', telegramNag: true, nagIntervalMinutes: 60 }),
     ]);
     render(<RoutinesView on={ON} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Vitamins' }));
-    await screen.findByLabelText('Nag frequency');
-    fireEvent.change(screen.getByLabelText('Nag frequency'), { target: { value: '120' } });
+    const count = (await screen.findByLabelText('Nag interval')) as HTMLInputElement;
+    expect(count.value).toBe('1'); // 60 min → shown as 1 hour
+    expect((screen.getByLabelText('Nag interval unit') as HTMLSelectElement).value).toBe('hours');
+    fireEvent.change(count, { target: { value: '2' } }); // 2 hours → 120
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateRoutine).toHaveBeenCalledWith('n1', { on: ON, nagIntervalMinutes: 120 }));
+  });
+
+  it('an odd stored interval (45) round-trips as "45 minutes", not a fractional hour', async () => {
+    vi.mocked(api.getRoutines).mockResolvedValue([
+      floating({ id: 'n3', name: 'Water', nextDue: '2026-01-20', telegramNag: true, nagIntervalMinutes: 45 }),
+    ]);
+    render(<RoutinesView on={ON} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Water' }));
+    const count = (await screen.findByLabelText('Nag interval')) as HTMLInputElement;
+    expect(count.value).toBe('45');
+    expect((screen.getByLabelText('Nag interval unit') as HTMLSelectElement).value).toBe('minutes');
   });
 
   it('turning nagging OFF in edit sends telegramNag:false (and no cadence)', async () => {

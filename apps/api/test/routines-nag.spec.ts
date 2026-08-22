@@ -63,12 +63,19 @@ describe('Routine nag fields + log link (real Postgres, ADR 0091 M2)', () => {
     expect(off.nagIntervalMinutes).toBeNull();
   });
 
-  it('rejects a nagIntervalMinutes outside {1,30,60,120}; allows 1 (the testing cadence)', async () => {
-    await expect(create({ ...floating, telegramNag: true, nagIntervalMinutes: 45 })).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-    const r = await create({ ...floating, telegramNag: true, nagIntervalMinutes: 1 });
-    expect(r.nagIntervalMinutes).toBe(1);
+  it('accepts any whole minute in 1..1440 (custom cadence, v0.41.1) — including the old presets', async () => {
+    for (const m of [1, 30, 45, 60, 120, 200, 1440]) {
+      const r = await create({ ...floating, telegramNag: true, nagIntervalMinutes: m });
+      expect(r.nagIntervalMinutes).toBe(m);
+    }
+  });
+
+  it('rejects a nagIntervalMinutes outside 1..1440 or non-integer (0, 1441, 1.5, negative)', async () => {
+    for (const bad of [0, 1441, 1.5, -5]) {
+      await expect(
+        create({ ...floating, telegramNag: true, nagIntervalMinutes: bad }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 
   it('linkLog on a floating routine find-or-creates a Log by the routine name and stores its id', async () => {

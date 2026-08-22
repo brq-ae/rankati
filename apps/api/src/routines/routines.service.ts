@@ -25,9 +25,6 @@ const requireDay = (v: unknown, field: string): string => {
 };
 const dateStr = (d: Date | null): string | null => (d === null ? null : d.toISOString().slice(0, 10));
 
-/** The nag cadences a routine may carry (minutes) — 1 is the urgent/testing value (ADR 0091 M2). */
-const NAG_INTERVALS = [1, 30, 60, 120];
-
 /** A nag-enabled routine + its computed nag state (ADR 0091 M2) — the scheduler's read shape. */
 export interface NaggableRoutine {
   row: Routine;
@@ -70,8 +67,13 @@ export class RoutinesService {
     if (dto.telegramNag !== undefined && typeof dto.telegramNag !== 'boolean') {
       throw new BadRequestException('telegramNag must be a boolean');
     }
-    if (dto.nagIntervalMinutes !== undefined && !NAG_INTERVALS.includes(dto.nagIntervalMinutes)) {
-      throw new BadRequestException(`nagIntervalMinutes must be one of ${NAG_INTERVALS.join(', ')}`);
+    if (dto.nagIntervalMinutes !== undefined) {
+      // A custom cadence (v0.41.1): any whole number of minutes from 1 (the per-minute tick's floor) to
+      // 1440 (24h). `Number.isInteger` also rejects a non-integer and NaN; the bounds reject 0 and negatives.
+      const n = dto.nagIntervalMinutes;
+      if (!Number.isInteger(n) || n < 1 || n > 1440) {
+        throw new BadRequestException('nagIntervalMinutes must be a whole number of minutes from 1 to 1440');
+      }
     }
     const telegramNag = dto.telegramNag ?? current.telegramNag;
     let nagIntervalMinutes = dto.nagIntervalMinutes ?? current.nagIntervalMinutes;
