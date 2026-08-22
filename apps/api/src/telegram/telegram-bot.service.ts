@@ -7,7 +7,7 @@ import {
   type TelegramInlineButton,
   type TelegramReplyMarkup,
 } from './telegram-bot.factory';
-import type { Impact, Routine, Task, TelegramBotStatus } from '@rankati/shared';
+import type { Impact, LogStats, Routine, Task, TelegramBotStatus } from '@rankati/shared';
 import {
   decodeDiscard,
   decodeDone,
@@ -40,7 +40,7 @@ import {
 } from './telegram-capture.service';
 import { TelegramConfigService } from './telegram-config.service';
 import { TelegramNagActionsService } from './telegram-nag-actions.service';
-import { TelegramReadService, type PinInfo } from './telegram-read.service';
+import { TelegramReadService, type LogDoneResult, type PinInfo } from './telegram-read.service';
 import type { LogSummary } from '../logs.service';
 import { PinSnoozeService } from '../pin-snooze.service';
 
@@ -56,6 +56,8 @@ const LIST_BUTTON_CAP = 24; // list-picker buttons (2 per row), then "…and M m
 const ROUTINES_NEEDS_TZ =
   'I need your timezone to order your reminders by due date. Set it in Settings → Telegram, then try again.';
 const LOGS_NO_TZ_HINT = 'Set a timezone in Settings → Telegram to also see “N days ago”.';
+// The `+name`/`/log` occurrence write needs the local day to date it (ADR 0091 M3) — refuse without a tz.
+const LOG_NEEDS_TZ = 'Set a timezone in Settings → Telegram to log occurrences.';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** 'YYYY-MM-DD' → "20 Jul", formatted from the parts so no timezone shifts the day. */
 function fmtDay(ymd: string): string {
@@ -63,6 +65,9 @@ function fmtDay(ymd: string): string {
   return `${Number(d)} ${MONTHS[Number(m) - 1]}`;
 }
 const dayCount = (n: number) => `${n} ${Math.abs(n) === 1 ? 'day' : 'days'}`;
+/** The Logs cadence hint for a `+name` reply — "usually ~7 days" once there are ≥2 occurrences, else ''. */
+const cadenceHint = (stats: LogStats): string =>
+  stats.count >= 2 && stats.averageGapDays != null ? `usually ~${dayCount(Math.round(stats.averageGapDays))}` : '';
 /** Whole days from `on` to `day` (negative = overdue), UTC-anchored so no timezone leaks in. */
 const daysBetween = (on: string, day: string) =>
   Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${on}T00:00:00Z`)) / 86_400_000);
@@ -80,6 +85,7 @@ const COMMANDS = [
   { command: 'now', description: 'The top card' },
   { command: 'add', description: 'Capture a task' },
   { command: 'idea', description: 'Capture an idea' },
+  { command: 'log', description: 'Log an occurrence' },
   { command: 'lists', description: 'Browse your lists' },
   { command: 'routines', description: 'Your reminders' },
   { command: 'logs', description: 'Your logs' },
@@ -187,7 +193,7 @@ export class TelegramBotService implements OnModuleDestroy {
         );
       } else if (chatId === boundChatId) {
         await ctx.reply(
-          "👋 You're linked. Send me anything to capture it as a task — or start a message with # to save it as an idea. /help for the commands.",
+          "👋 You're linked. Send me anything to capture it as a task — start with # to save it as an idea, or + to log an occurrence (e.g. +walk). /help for the commands.",
         );
       } else {
         await ctx.reply('This bot is already linked to another chat.');
@@ -199,9 +205,11 @@ export class TelegramBotService implements OnModuleDestroy {
         [
           'Send me any message to capture it as a task.',
           'Start a message with # to save it as an idea instead (or use /idea).',
+          'Start a message with + to log an occurrence, e.g. +walk (or use /log).',
           '',
           '/add <text> — capture a task',
           '/idea <text> — capture an idea (or just start with #)',
+          '/log <name> — log an occurrence (or just start with +)',
           '/today — your hand for today',
           '/now — the top card',
         ].join('\n'),
@@ -232,6 +240,19 @@ export class TelegramBotService implements OnModuleDestroy {
         return;
       }
       await this.captureIdeaAndReply(ctx, text, true); // teach the "#" shortcut on the /idea path
+    });
+
+    bot.command('log', async (ctx) => {
+      if (!(await this.isBoundChat(ctx))) {
+        await ctx.reply(NOT_LINKED);
+        return;
+      }
+      const text = (ctx.match ?? '').trim();
+      if (!text) {
+        await ctx.reply('Send /log followed by what to log — e.g. “/log walk”. Or just start a message with +.');
+        return;
+      }
+      await this.logDoneAndReply(ctx, text, true); // teach the "+" shortcut on the /log path
     });
 
     // /today — the fresh top-5 hand, each card with a ✓ Done button (Step 6). Served only to the linked chat.
@@ -568,6 +589,10 @@ export class TelegramBotService implements OnModuleDestroy {
           // stays a normal capture. No '#' → the existing Inbox capture + re-file flow, unchanged.
           if (raw.trimStart().startsWith('#')) {
             await this.captureIdeaAndReply(ctx, raw.trimStart().replace(/^#\s?/, ''), false);
+          } else if (raw.trimStart().startsWith('+')) {
+            // A LEADING '+' logs a Log occurrence (ADR 0091 M3): strip the '+' and one optional space; the
+            // rest is the log name. Only a leading '+' triggers it — "+1 more" stays a normal task capture.
+            await this.logDoneAndReply(ctx, raw.trimStart().replace(/^\+\s?/, ''), false);
           } else {
             await this.captureAndReply(ctx, raw);
           }
@@ -639,6 +664,34 @@ export class TelegramBotService implements OnModuleDestroy {
       return;
     }
     await ctx.reply(teach ? 'Saved 💡 — tip: next time just start with #' : `💡 Saved as idea: ${saved.title}`);
+  }
+
+  /** Record a Log occurrence from `+name` / `/log name` (ADR 0091 M3) and confirm. `teach` (the /log path)
+   *  nudges toward the faster '+' prefix. No tz → refuse (can't date the day); a just-created Log is flagged
+   *  "(new log)" so a typo is visible; the cadence hint rides along once there are ≥2 occurrences. */
+  private async logDoneAndReply(ctx: TelegramContext, rawName: string, teach: boolean): Promise<void> {
+    const name = rawName.trim();
+    if (!name) {
+      await ctx.reply('Tell me what to log — e.g. “+walk”, or /log walk.');
+      return;
+    }
+    let result: LogDoneResult;
+    try {
+      result = await this.read.logDone(name);
+    } catch (err) {
+      this.logError('log occurrence failed', err);
+      await ctx.reply('Something went wrong logging that — please try again in a moment.');
+      return;
+    }
+    if (result.status === 'no-timezone') {
+      await ctx.reply(LOG_NEEDS_TZ);
+      return;
+    }
+    let line = `✓ Logged: ${result.name}`;
+    if (result.created) line += ' (new log)';
+    const hint = cadenceHint(result.stats);
+    if (hint) line += ` — ${hint}`;
+    await ctx.reply(teach ? `${line}\n💡 tip: next time just start with +` : line);
   }
 
   /** The capture keyboard: re-file list buttons (2 per row), then a 🗑 Discard button on its OWN row so it

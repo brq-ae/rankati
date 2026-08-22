@@ -85,6 +85,8 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
   let listTasksCalls: string[];
   let routinesResult: Awaited<ReturnType<TelegramReadService['readRoutines']>>;
   let logsResult: Awaited<ReturnType<TelegramReadService['readLogs']>>;
+  let logDoneResult: Awaited<ReturnType<TelegramReadService['logDone']>>;
+  const logDoneCalls: string[] = [];
   let setCommandsThrows: boolean;
   let service: TelegramBotService;
 
@@ -178,6 +180,10 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     },
     readRoutines: async () => routinesResult,
     readLogs: async () => logsResult,
+    logDone: async (name: string) => {
+      logDoneCalls.push(name);
+      return logDoneResult;
+    },
   } as unknown as TelegramReadService;
 
   const mockPinSnooze = {
@@ -242,6 +248,8 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     listTasksCalls = [];
     routinesResult = { status: 'ok', on: '2026-07-30', routines: [] };
     logsResult = { hasTimezone: true, logs: [] };
+    logDoneResult = { status: 'ok', name: 'Walk', created: false, stats: { lastDoneOn: '2026-07-30', count: 3, averageGapDays: 7, currentGapDays: 2 } };
+    logDoneCalls.length = 0;
     setCommandsThrows = false;
     nagDidCalls.length = 0;
     nagSnoozeCalls.length = 0;
@@ -402,6 +410,8 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     expect(replies[0]).toContain('/add');
     expect(replies[0]).toContain('/today');
     expect(replies[0]).toContain('/now');
+    expect(replies[0]).toContain('/log'); // ADR 0091 M3 discoverability
+    expect(replies[0]).toContain('+walk'); // the + shortcut is surfaced
   });
 
   // ---------------------------------------------------------------- capture + re-file (Step 5)
@@ -465,6 +475,75 @@ describe('TelegramBotService (mocked config/capture/read, fake bot)', () => {
     await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy #10 screws' }));
     expect(captureCalls).toEqual(['buy #10 screws']); // a task
     expect(ideaCaptureCalls).toEqual([]); // NOT an idea
+  });
+
+  // ---------------------------------------------------------------- +name / /log occurrence (ADR 0091 M3)
+  it('a LEADING + logs an occurrence (not a task): strips + and one space, confirms with the name + cadence', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: '+ walk' }));
+    expect(logDoneCalls).toEqual(['walk']); // + + one space stripped
+    expect(captureCalls).toEqual([]); // NOT captured as a task
+    expect(rec.replies[0].text).toBe('✓ Logged: Walk — usually ~7 days'); // count 3 → cadence hint
+  });
+
+  it('a + that is NOT leading stays a normal task capture (+1 more chair)', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCtx(bot.messageHandler, makeCtx(42, { text: 'buy +1 more chair' }));
+    expect(captureCalls).toEqual(['buy +1 more chair']); // a task
+    expect(logDoneCalls).toEqual([]); // NOT a log
+  });
+
+  it('a just-created log is flagged "(new log)" and shows no cadence hint (count 1)', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    logDoneResult = { status: 'ok', name: 'Wlak', created: true, stats: { lastDoneOn: '2026-07-30', count: 1, averageGapDays: null, currentGapDays: 0 } };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: '+Wlak' }));
+    expect(rec.replies[0].text).toBe('✓ Logged: Wlak (new log)');
+  });
+
+  it('+ with no timezone set replies "set a timezone", logs nothing meaningful', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    logDoneResult = { status: 'no-timezone' };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: '+walk' }));
+    expect(rec.replies[0].text).toBe('Set a timezone in Settings → Telegram to log occurrences.');
+  });
+
+  it('a bare + (nothing after) gently prompts, calls logDone with nothing', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.messageHandler, makeCtx(42, { text: '+' }));
+    expect(logDoneCalls).toEqual([]); // empty name → prompt, never a logDone
+    expect(rec.replies[0].text).toContain('what to log');
+  });
+
+  it('/log <name> logs and teaches the + shortcut; /log alone hints and logs nothing', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    const { rec } = await fireCtx(bot.commandHandlers.log, makeCtx(42, { match: 'walk' }));
+    expect(logDoneCalls).toEqual(['walk']);
+    expect(rec.replies[0].text).toContain('✓ Logged: Walk');
+    expect(rec.replies[0].text).toContain('start with +'); // teaches the shortcut
+    logDoneCalls.length = 0;
+    const { rec: rec2 } = await fireCtx(bot.commandHandlers.log, makeCtx(42, { match: '   ' }));
+    expect(logDoneCalls).toEqual([]);
+    expect(rec2.replies[0].text).toContain('/log');
+  });
+
+  it('+name from an UNBOUND chat is not logged (routed as a bind attempt, not a capture)', async () => {
+    binding = { boundChatId: null, linkCode: null }; // no chat bound yet
+    const bot = await startedBot();
+    await fireCtx(bot.messageHandler, makeCtx(42, { text: '+walk' }));
+    expect(logDoneCalls).toEqual([]); // the message handler only captures for the bound chat
+  });
+
+  it('+name from a FOREIGN chat (bound elsewhere) is not logged', async () => {
+    binding = { boundChatId: '42', linkCode: null };
+    const bot = await startedBot();
+    await fireCtx(bot.messageHandler, makeCtx(999, { text: '+walk' }));
+    expect(logDoneCalls).toEqual([]); // foreign chat → "linked to another chat", no capture
   });
 
   it('/idea <text> captures an idea and teaches the # shortcut; /idea alone hints and saves nothing', async () => {

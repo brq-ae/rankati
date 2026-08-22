@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { computePin, sortRoutines, type Impact, type Routine, type Task } from '@rankati/shared';
+import { computePin, sortRoutines, type Impact, type LogStats, type Routine, type Task } from '@rankati/shared';
 import { CLOCK, type Clock } from '../auth/clock';
 import { LOCAL_OWNER_ID } from '../constants';
 import { ListsService } from '../lists.service';
@@ -28,6 +28,9 @@ export type ListTasksResult =
   | { status: 'gone' }
   | { status: 'ok'; name: string; tasks: { title: string; impact: Impact }[] };
 export type RoutinesResult = { status: 'no-timezone' } | { status: 'ok'; on: string; routines: Routine[] };
+// The `+name` / `/log` occurrence write (ADR 0091 M3): dating a Log occurrence needs the owner's local day,
+// so a missing timezone reports `no-timezone` (the command refuses). `created` flags a just-made Log.
+export type LogDoneResult = { status: 'no-timezone' } | { status: 'ok'; name: string; created: boolean; stats: LogStats };
 export type LogsResult = { hasTimezone: boolean; logs: LogSummary[] };
 
 /**
@@ -164,5 +167,20 @@ export class TelegramReadService {
   async readLogs(): Promise<LogsResult> {
     const clock = await this.resolveClock();
     return { hasTimezone: clock !== null, logs: await this.logs.readSummaries(clock ? clock.on : null) };
+  }
+
+  /**
+   * Record a Log occurrence from a Telegram `+name` / `/log name` (ADR 0091 M3): find-or-create the Log by
+   * name (case-insensitive) and stamp the owner's LOCAL day (idempotent per day). Dating the occurrence needs
+   * the timezone, so with none set it reports `no-timezone` and the command refuses rather than mis-date it —
+   * the same floor as /today, /routines, and the nags. Returns the stamped Log's stats for the cadence hint
+   * and whether the Log was just created (so the reply can flag "(new log)").
+   */
+  async logDone(name: string): Promise<LogDoneResult> {
+    const clock = await this.resolveClock();
+    if (!clock) return { status: 'no-timezone' };
+    const log = await this.logs.findOrCreateByName(name); // owner-scoped; throws 400 on an empty name (the bot pre-checks)
+    const dto = await this.logs.did(log.id, clock.on);
+    return { status: 'ok', name: dto.name, created: log.created, stats: dto.stats };
   }
 }

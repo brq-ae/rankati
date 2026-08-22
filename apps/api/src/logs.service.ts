@@ -125,11 +125,12 @@ export class LogsService {
   }
 
   /**
-   * Find the owner's Log named `name` (CASE-INSENSITIVE), or create it — the reminder→log link (ADR 0091):
-   * enabling the link on a routine reuses an existing same-named Log ("Haircut" = "haircut") rather than
-   * spawning a duplicate. Mirrors the Telegram Inbox find-or-create. Returns just the id (the caller stores it).
+   * Find the owner's Log named `name` (CASE-INSENSITIVE), or create it — the reminder→log link (ADR 0091)
+   * and the `+name`/`/log` Telegram shortcut (ADR 0091 M3): reuse an existing same-named Log ("Haircut" =
+   * "haircut") rather than spawning a duplicate. Mirrors the Telegram Inbox find-or-create. `created` tells
+   * the caller whether a new Log was just made (the M3 reply flags "(new log)" so a typo is visible).
    */
-  async findOrCreateByName(name: string): Promise<{ id: string; name: string }> {
+  async findOrCreateByName(name: string): Promise<{ id: string; name: string; created: boolean }> {
     const trimmed = typeof name === 'string' ? name.trim() : '';
     if (!trimmed) throw new BadRequestException('name is required');
     const existing = await this.prisma.log.findFirst({
@@ -137,8 +138,12 @@ export class LogsService {
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     });
-    if (existing) return existing;
-    return this.prisma.log.create({ data: { name: trimmed, ownerId: LOCAL_OWNER_ID }, select: { id: true, name: true } });
+    if (existing) return { ...existing, created: false };
+    const made = await this.prisma.log.create({
+      data: { name: trimmed, ownerId: LOCAL_OWNER_ID },
+      select: { id: true, name: true },
+    });
+    return { ...made, created: true };
   }
 
   async rename(id: string, dto: UpdateLogDto, on?: string): Promise<LogDto> {

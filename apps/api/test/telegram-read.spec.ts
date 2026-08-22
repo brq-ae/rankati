@@ -198,4 +198,45 @@ describe('Telegram read service (real Postgres + mocked pin inputs)', () => {
       expect(b.currentGapDays).toBe(10); // 20 Jul → 30 Jul
     });
   });
+
+  // logDone — the `+name` / `/log` occurrence write (ADR 0091 M3): tz-gated, find-or-create, idempotent/day.
+  describe('logDone()', () => {
+    const dayClock = (iso: string): Clock => ({ now: () => new Date(iso) });
+
+    it('with no timezone → no-timezone, and creates NOTHING (never mis-dates)', async () => {
+      const r = await readWithTz(null).logDone('Zzz M3 NoTz');
+      expect(r).toEqual({ status: 'no-timezone' });
+      const n = await prisma.log.count({ where: { ownerId: LOCAL_OWNER_ID, name: 'Zzz M3 NoTz' } });
+      expect(n).toBe(0); // gated before find-or-create
+    });
+
+    it('creates the Log + stamps today (created:true, count 1)', async () => {
+      const r = await readWithTz('UTC', dayClock('2026-07-20T12:00:00.000Z')).logDone('Zzz M3 Walk');
+      expect(r).toMatchObject({ status: 'ok', name: 'Zzz M3 Walk', created: true });
+      if (r.status !== 'ok') throw new Error('unreachable');
+      expect(r.stats.count).toBe(1);
+      expect(r.stats.lastDoneOn).toBe('2026-07-20');
+    });
+
+    it('is idempotent per day — a second +name the same day does not double-count (created:false)', async () => {
+      const svc = readWithTz('UTC', dayClock('2026-07-20T12:00:00.000Z'));
+      await svc.logDone('Zzz M3 Water');
+      const r2 = await svc.logDone('Zzz M3 Water');
+      expect(r2).toMatchObject({ status: 'ok', created: false });
+      if (r2.status !== 'ok') throw new Error('unreachable');
+      expect(r2.stats.count).toBe(1); // same calendar day → one occurrence
+    });
+
+    it('reuses a same-named Log case-insensitively (Haircut = haircut), created:false, no duplicate', async () => {
+      await readWithTz('UTC', dayClock('2026-07-20T12:00:00.000Z')).logDone('Zzz M3 Haircut');
+      const r = await readWithTz('UTC', dayClock('2026-07-27T12:00:00.000Z')).logDone('zzz m3 haircut');
+      expect(r).toMatchObject({ status: 'ok', created: false });
+      if (r.status !== 'ok') throw new Error('unreachable');
+      expect(r.stats.count).toBe(2); // 20 Jul + 27 Jul, on the ONE log
+      const n = await prisma.log.count({
+        where: { ownerId: LOCAL_OWNER_ID, name: { in: ['Zzz M3 Haircut', 'zzz m3 haircut'] } },
+      });
+      expect(n).toBe(1); // reused, not duplicated
+    });
+  });
 });

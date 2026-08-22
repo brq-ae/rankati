@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] — 2026-08-22
+
+### Added
+
+- **Log something from Telegram in one message.** Start a message with **`+`** to record a Log occurrence — `+walk` marks a walk today, `+haircut` a haircut. It finds your existing Log by name (case-insensitive, so `+Haircut` and `+haircut` are the same one) or creates it the first time (the reply says **(new log)** so a typo is easy to spot), and logging the same thing twice in a day counts once. Once a Log has a couple of entries the reply adds its cadence, e.g. **"✓ Logged: Walk — usually ~7 days"**. There's also a **`/log <name>`** command in the `/` menu that does the same. Because an occurrence is dated to your day, this needs your timezone set (Settings → Telegram); without one it asks you to set it rather than guess the date.
+
 ## [0.40.0] — 2026-08-22
 
 ### Added
