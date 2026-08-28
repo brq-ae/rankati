@@ -201,8 +201,9 @@ export const createRequiredTask = (id: string, dto: CreateRequiredTaskDto): Prom
   request<Task>(`/api/tasks/${id}/requires`, { method: 'POST', body: JSON.stringify(dto) });
 
 /** 204, so there is no body to parse. */
-export const deleteTask = async (id: string): Promise<void> => {
-  const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+export const deleteTask = async (id: string, keepalive = false): Promise<void> => {
+  // `keepalive` lets a deferred delete (ADR 0092) commit on page-leave, like completeTask's tick commit.
+  const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE', keepalive });
   ensureOk(res);
 };
 
@@ -252,8 +253,12 @@ export const submitResult = (sessionId: string, dto: SubmitResultDto): Promise<N
   });
 
 /** Undo the last tap and get a FRESH pair — never the mis-tapped one (ADR 0048). */
-export const undoLastResult = (sessionId: string): Promise<NextPairResult> =>
-  request<NextPairResult>(`/api/duel-sessions/${sessionId}/results/last`, { method: 'DELETE' });
+export const undoLastResult = (sessionId: string, exclude?: string[]): Promise<NextPairResult> =>
+  // The re-deal honours the pending-delete exclude set (ADR 0092), carried in the DELETE body when present.
+  request<NextPairResult>(`/api/duel-sessions/${sessionId}/results/last`, {
+    method: 'DELETE',
+    ...(exclude && exclude.length > 0 ? { body: JSON.stringify({ exclude }) } : {}),
+  });
 
 /** End the sitting: ratings settle here, and this is the only place numbers are shown. */
 export const commitSession = (sessionId: string): Promise<CommitSummary> =>

@@ -153,7 +153,10 @@ describe('deleting a blocker warns first (0053)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Delete Alpha/i }));
     expect(confirm).not.toHaveBeenCalled();
-    expect(patched.some((p) => p.url.includes('/api/tasks/a'))).toBe(true);
+    // Delete now has the 15s grace (ADR 0092), so nothing is written at tap; leaving commits it.
+    expect(patched.some((p) => p.url.includes('/api/tasks/a'))).toBe(false);
+    window.dispatchEvent(new Event('pagehide'));
+    await waitFor(() => expect(patched.some((p) => p.url.includes('/api/tasks/a'))).toBe(true));
   });
 });
 

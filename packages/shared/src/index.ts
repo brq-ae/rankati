@@ -448,6 +448,8 @@ export interface DuelPair {
 /** POST /duel-sessions — an optional list narrows the pool without changing the rating (0003). */
 export interface StartSessionDto {
   listId?: string | null;
+  /** Task ids to keep OUT of the deal — the client's pending-deletes (ADR 0092). Per-call, not stored. */
+  exclude?: string[];
 }
 
 /**
@@ -520,6 +522,13 @@ export interface SubmitResultDto {
   loserId: string;
   /** The `dealId` of the pair that was on screen when this tap happened. */
   dealId: string;
+  /** Task ids to keep OUT of the NEXT deal — the client's pending-deletes (ADR 0092). Per-call, not stored. */
+  exclude?: string[];
+}
+
+/** The undo path also re-deals, so it carries the same pending-delete exclude set (ADR 0092). */
+export interface UndoLastDto {
+  exclude?: string[];
 }
 
 /** What one task's rating did across a whole sitting. */

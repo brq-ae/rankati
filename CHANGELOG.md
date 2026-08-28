@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] — 2026-08-28
+
+### Added
+
+- **Deleting a task now has a 15-second undo — the same as completing one.** Tap the **✕** and the task doesn't vanish for good: its row stays in place, struck through, with a winding ring where the ✕ was. Tap that ring any time in the next 15 seconds to undo, and nothing was ever deleted. Leave it be (or close the app) and the delete goes through. While the ring is running, the task is held out of your Today hand so you're never dealt a card you just deleted. (Deleting a task that others depend on still warns you first, and deleting a whole list still asks you to type to confirm.)
+
 ## [0.41.1] — 2026-08-22
 
 ### Changed

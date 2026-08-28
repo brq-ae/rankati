@@ -9,7 +9,7 @@ import type {
   TaskTier,
   UpdateChecklistItemDto,
 } from '@rankati/shared';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Arena, { type ArenaHandle } from './Arena';
 import ConfirmDestructive from './ConfirmDestructive';
 import CreateAccount from './CreateAccount';
@@ -193,6 +193,16 @@ export default function App() {
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Deferred delete — the tick's 15s grace, applied to the ✕ (ADR 0092, mirrors 0055). A PARALLEL map,
+  // not folded into `pending`: a pending tick and a pending delete are different commits. The real DELETE
+  // fires ONLY at commit (ring-end or on-leave), so an undo inside the window writes nothing.
+  const [pendingDelete, setPendingDelete] = useState<Map<string, number>>(() => new Map());
+  const pendingDeleteRef = useRef(pendingDelete);
+  pendingDeleteRef.current = pendingDelete;
+  const deleteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // The LIVE pending-delete set for the Arena's deal (ADR 0092) — a stable callback reading the ref, so
+  // the Arena's start/pick/undo (which fire at arbitrary later times) never see a stale snapshot.
+  const excludeIds = useCallback(() => [...pendingDeleteRef.current.keys()], []);
   const [editingListId, setEditingListId] = useState<string | null>(null);
   const [editListName, setEditListName] = useState('');
   /** Which list is pending deletion — drives the ConfirmDestructive dialog (v0.13, ADR 0064). */
@@ -362,6 +372,7 @@ export default function App() {
   useEffect(() => {
     const flush = () => {
       for (const id of [...pendingRef.current.keys()]) void commitTick(id, 'leave');
+      for (const id of [...pendingDeleteRef.current.keys()]) void commitDelete(id, 'leave'); // ADR 0092
     };
     const onHide = () => {
       if (document.visibilityState === 'hidden') flush();
@@ -1068,24 +1079,56 @@ export default function App() {
     }
   }
 
-  async function onDelete(id: string): Promise<void> {
-    // Deleting a blocker unblocks its dependents — the backend cascades unconditionally
-    // (0053), which is right, but it happens at a distance: a task can appear in Today
-    // because of something you did on this screen. Say so first rather than let it be a
-    // surprise. The count is a filter over data already held, not a request.
+  /** Forget a pending delete — undo, or once commit has taken over. Mirrors `clearPending` (ADR 0092). */
+  function clearPendingDelete(id: string): void {
+    const timer = deleteTimers.current.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    deleteTimers.current.delete(id);
+    setPendingDelete((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  /**
+   * Commit a delete — the ONLY place the server is told (ADR 0092, mirrors `commitTick`). Never at tap.
+   *   'ring'  — you are looking at it. A failure reverts (clearing pending un-hides + restores the ✕) and
+   *             shows the error; refresh() because a cascade may have made dependents playable.
+   *   'leave' — the page is going; `keepalive` maximises delivery, and there is nobody to show an error to.
+   */
+  async function commitDelete(id: string, mode: 'ring' | 'leave'): Promise<void> {
+    clearPendingDelete(id);
+    try {
+      await deleteTask(id, mode === 'leave');
+      if (mode === 'ring') await refresh(); // dependents may now be playable
+    } catch (e) {
+      if (mode === 'ring') setError((e as Error).message);
+      // 'leave': there is no one left to tell.
+    }
+  }
+
+  /**
+   * The ✕ (ADR 0092). Tapping an untouched task starts the 15s grace; tapping a pending one takes it back —
+   * not a reversal, because nothing was ever written. The dependent-unblock warning (0053) stays at TAP:
+   * commit can fire on-leave with no user present, so there is no later moment to prompt. A delete SUPERSEDES
+   * a pending tick (cancel it first) — delete intent is stronger.
+   */
+  function onToggleDelete(id: string): void {
+    if (pendingDeleteRef.current.has(id)) {
+      clearPendingDelete(id); // no request was ever made, so there is nothing to undo
+      return;
+    }
     const unblocks = tasks.filter((t) => t.dependsOn.includes(id)).length;
     if (unblocks > 0) {
       const noun = unblocks === 1 ? 'task' : 'tasks';
       if (!window.confirm(`This will unblock ${unblocks} ${noun}. Delete anyway?`)) return;
     }
-
     setError(null);
-    try {
-      await deleteTask(id);
-      await refresh(); // dependents may now be playable
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    if (pendingRef.current.has(id)) clearPending(id); // delete supersedes a pending tick
+    const timer = setTimeout(() => void commitDelete(id, 'ring'), TICK_GRACE_MS);
+    deleteTimers.current.set(id, timer);
+    setPendingDelete((prev) => new Map(prev).set(id, Date.now() + TICK_GRACE_MS));
   }
 
   /**
@@ -1121,7 +1164,12 @@ export default function App() {
     () => tasks.filter((t) => t.status === 'active' && t.needsDetails),
     [tasks],
   );
-  const visibleToday = useMemo(() => filterByLocation(today, location), [today, location]);
+  // Hide pending-delete tasks from the Today hand + the pin for the 15s grace (ADR 0092): being dealt a
+  // card you just deleted is jarring. The one deliberate divergence from 0055 (pending ticks stay visible).
+  const visibleToday = useMemo(
+    () => filterByLocation(today, location).filter((t) => !pendingDelete.has(t.id)),
+    [today, location, pendingDelete],
+  );
   const visibleUpcoming = useMemo(() => filterByLocation(upcoming, location), [upcoming, location]);
   /**
    * The dealt hand (ADR 0074) — composed CLIENT-SIDE over the location-filtered playable set: the
@@ -1299,7 +1347,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.41.1 — custom nag interval</p>
+            <p className="text-sm text-muted">v0.42.0 — delete grace</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1411,6 +1459,7 @@ export default function App() {
             <Arena
               ref={arenaRef}
               onCommitted={() => void refresh().catch((e: Error) => setError(e.message))}
+              excludeIds={excludeIds}
             />
 
             {/* Add a task. Stacks in portrait, spreads in landscape. */}
@@ -1678,7 +1727,8 @@ export default function App() {
                               tasks={tasks}
                               onToggleTick={onToggleTick}
                               pendingUntil={pending.get(task.id)}
-                              onDelete={onDelete}
+                              pendingDeleteUntil={pendingDelete.get(task.id)}
+                              onDelete={onToggleDelete}
                               onOpenDetail={openDetail}
                             />
                           ))}

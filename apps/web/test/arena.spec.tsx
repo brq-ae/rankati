@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Task } from '@rankati/shared';
@@ -70,6 +70,33 @@ describe('Arena — one start path, no memory of the last list (v0.12)', () => {
     await screen.findByRole('button', { name: 'Pick Alpha' }); // dueling again
     expect(vi.mocked(api.startSession).mock.calls.at(-1)?.[0]).toEqual({}); // all-tasks, not { listId }
     expect(document.body.textContent).not.toContain('Dueling:'); // no stale pool label
+  });
+
+  it('carries the pending-delete exclude set on start / pick / undo (ADR 0092)', async () => {
+    vi.mocked(api.submitResult).mockResolvedValue({
+      status: 'pair',
+      pair: { dealId: 'd2', a: task('a', 'Alpha'), b: task('b', 'Beta') },
+    });
+    vi.mocked(api.undoLastResult).mockResolvedValue({
+      status: 'pair',
+      pair: { dealId: 'd3', a: task('a', 'Alpha'), b: task('b', 'Beta') },
+    });
+    const ref = createRef<ArenaHandle>();
+    render(<Arena ref={ref} onCommitted={vi.fn()} excludeIds={() => ['x', 'y']} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dueling' }));
+    await screen.findByRole('button', { name: 'Pick Alpha' });
+    expect(vi.mocked(api.startSession).mock.calls.at(-1)?.[0]).toEqual({ exclude: ['x', 'y'] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick Alpha' }));
+    await waitFor(() => expect(vi.mocked(api.submitResult)).toHaveBeenCalled());
+    expect(vi.mocked(api.submitResult).mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ exclude: ['x', 'y'] }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(vi.mocked(api.undoLastResult)).toHaveBeenCalled());
+    expect(vi.mocked(api.undoLastResult).mock.calls.at(-1)).toEqual(['s1', ['x', 'y']]);
   });
 
   it('the own button and the handle are the SAME start path — the pool argument is the only difference', async () => {

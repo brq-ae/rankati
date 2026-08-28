@@ -1,6 +1,7 @@
 import type { Task } from '@rankati/shared';
 import { isGated, isWindowOpen, localDay, localTime } from './local-day';
 import PendingBar from './PendingBar';
+import DeleteRing from './DeleteRing';
 import TickCircle from './TickCircle';
 import { tierOf } from './tiers';
 
@@ -35,6 +36,8 @@ interface TaskRowProps {
   onToggleTick: (id: string) => void;
   /** Set while this tick is pending — the ring is running and nothing has been written. */
   pendingUntil?: number;
+  /** Set while a DELETE is pending (ADR 0092) — the row is struck and the ✕ is the winding undo ring. */
+  pendingDeleteUntil?: number;
   onDelete: (id: string) => void;
   /** Opens the detail view — where the name, dates, tier and list are edited. */
   onOpenDetail: (id: string) => void;
@@ -45,6 +48,7 @@ export default function TaskRow({
   tasks,
   onToggleTick,
   pendingUntil,
+  pendingDeleteUntil,
   onDelete,
   onOpenDetail,
 }: TaskRowProps) {
@@ -80,7 +84,7 @@ export default function TaskRow({
           aria-label={`Open details for ${task.title}`}
           title={task.title}
           className={`min-w-0 flex-1 text-left ${hasMeta ? 'truncate' : 'line-clamp-2 break-words'} ${
-            task.status === 'done'
+            task.status === 'done' || pendingDeleteUntil !== undefined
               ? 'text-faint line-through'
               : 'text-fg'
           }`}
@@ -88,15 +92,9 @@ export default function TaskRow({
           {task.title}
         </button>
 
-        {/* Minor and last, well clear of the done-circle so it cannot be mis-tapped for it. */}
-        <button
-          type="button"
-          onClick={() => onDelete(task.id)}
-          aria-label={`Delete ${task.title}`}
-          className="touch-manipulation shrink-0 rounded-sm px-2 py-1 text-sm text-faint hover:bg-danger-bg hover:text-danger"
-        >
-          ✕
-        </button>
+        {/* Minor and last, well clear of the done-circle so it cannot be mis-tapped for it. While a delete
+            is pending (ADR 0092) it becomes the winding undo ring; tap = undo, wired to App's onToggleDelete. */}
+        <DeleteRing task={task} pendingDeleteUntil={pendingDeleteUntil} onToggleDelete={onDelete} />
       </div>
 
       {/* Line 2: the metadata glance (0056), display-only — set in the detail view. Rendered

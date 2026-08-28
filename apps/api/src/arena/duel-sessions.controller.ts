@@ -5,6 +5,7 @@ import type {
   StartSessionDto,
   StartSessionResult,
   SubmitResultDto,
+  UndoLastDto,
 } from '@rankati/shared';
 import { ArenaSessionService, MIN_POOL } from './arena-session.service';
 
@@ -33,12 +34,12 @@ export class DuelSessionsController {
   @Post()
   @HttpCode(200)
   async start(@Body() dto: StartSessionDto): Promise<StartSessionResult> {
-    const outcome = await this.arena.start(dto?.listId ?? null);
+    const outcome = await this.arena.start(dto?.listId ?? null, dto?.exclude);
     if (outcome.status === 'need-more-tasks') {
       return { status: 'need-more-tasks', activeCount: outcome.activeCount, required: MIN_POOL };
     }
 
-    const next = await this.arena.nextPair(outcome.session.id);
+    const next = await this.arena.nextPair(outcome.session.id, dto?.exclude);
     // start() just proved the pool holds two active tasks, so this is a pair.
     return next.status === 'pair'
       ? { status: 'started', sessionId: outcome.session.id, pair: next.pair }
@@ -58,7 +59,7 @@ export class DuelSessionsController {
     @Body() dto: SubmitResultDto,
   ): Promise<NextPairResult> {
     this.arena.submitResult(id, dto.winnerId, dto.loserId, dto.dealId);
-    return this.arena.nextPair(id);
+    return this.arena.nextPair(id, dto.exclude);
   }
 
   /**
@@ -67,10 +68,11 @@ export class DuelSessionsController {
    */
   @Delete(':id/results/last')
   @HttpCode(200)
-  async undo(@Param('id') id: string): Promise<NextPairResult> {
+  async undo(@Param('id') id: string, @Body() dto?: UndoLastDto): Promise<NextPairResult> {
     this.arena.undoLast(id);
     // Undoing nothing is a no-op, not an error: the button stays pressable at zero taps.
-    return this.arena.nextPair(id);
+    // The re-deal honours the same pending-delete exclude set (ADR 0092), carried in the DELETE body.
+    return this.arena.nextPair(id, dto?.exclude);
   }
 
   /** End the sitting: compute once, persist, write history, and report what moved. */

@@ -45,6 +45,12 @@ type Phase =
 interface ArenaProps {
   /** Called after a sitting commits, so the ranked list can reload in its new order. */
   onCommitted: () => void;
+  /**
+   * The task ids to keep OUT of the deal — the client's pending-deletes (ADR 0092). A CALLBACK, not a
+   * snapshot: start/pick/undo fire at arbitrary later times, so they must read the LIVE set (App reads
+   * pendingDeleteRef), never a render-time copy — mirrors how App's leave-flush reads the ref.
+   */
+  excludeIds?: () => string[];
 }
 
 /**
@@ -58,7 +64,12 @@ export interface ArenaHandle {
   scrollIntoView: () => void;
 }
 
-const Arena = forwardRef<ArenaHandle, ArenaProps>(function Arena({ onCommitted }, ref) {
+const Arena = forwardRef<ArenaHandle, ArenaProps>(function Arena({ onCommitted, excludeIds }, ref) {
+  /** The current pending-delete exclude, shaped for a request — omitted when empty (ADR 0092). */
+  const excludePayload = (): { exclude?: string[] } => {
+    const ids = excludeIds?.() ?? [];
+    return ids.length > 0 ? { exclude: ids } : {};
+  };
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [error, setError] = useState<string | null>(null);
   /** The Arena's own section, so App can scroll to it when a VS button starts a list session. */
@@ -115,7 +126,7 @@ const Arena = forwardRef<ArenaHandle, ArenaProps>(function Arena({ onCommitted }
     setError(null);
     setPhase({ kind: 'starting' });
     try {
-      const result = await startSession(listId ? { listId } : {});
+      const result = await startSession({ ...(listId ? { listId } : {}), ...excludePayload() });
       setPhase(
         result.status === 'started'
           ? {
@@ -164,6 +175,7 @@ const Arena = forwardRef<ArenaHandle, ArenaProps>(function Arena({ onCommitted }
           winnerId: winner.id,
           loserId: loser.id,
           dealId: pair.dealId,
+          ...excludePayload(),
         });
         applyNext(sessionId, next, taps + 1, pool);
       } catch (e) {
@@ -189,7 +201,7 @@ const Arena = forwardRef<ArenaHandle, ArenaProps>(function Arena({ onCommitted }
     const { sessionId, taps, pool } = phase;
     setError(null);
     try {
-      const next = await undoLastResult(sessionId);
+      const next = await undoLastResult(sessionId, excludeIds?.());
       applyNext(sessionId, next, taps - 1, pool);
     } catch (e) {
       setError((e as Error).message);

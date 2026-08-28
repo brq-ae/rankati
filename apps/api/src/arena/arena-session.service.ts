@@ -92,20 +92,23 @@ export class ArenaSessionService {
 
   /** Active tasks only — completed tasks retire from the pool with their rating frozen
    *  (0047). An optional list narrows the pool without changing the rating (0003). */
-  private eligibleWhere(listId: string | null): Prisma.TaskWhereInput {
+  private eligibleWhere(listId: string | null, exclude?: string[]): Prisma.TaskWhereInput {
     return {
       ownerId: LOCAL_OWNER_ID,
       status: 'active',
       ...(listId ? { listId } : {}),
+      // Keep the client's pending-deletes out of the DEAL (ADR 0092). Per-call, never stored on the
+      // session — the set changes as ✕s are added/undone. commit() passes none: it resolves for real.
+      ...(exclude && exclude.length > 0 ? { id: { notIn: exclude } } : {}),
     };
   }
 
-  private async eligibleTasks(listId: string | null): Promise<TaskWithRelations[]> {
+  private async eligibleTasks(listId: string | null, exclude?: string[]): Promise<TaskWithRelations[]> {
     // The include is not optional: toTaskDto requires the relation, so a query that
     // omitted it would not compile (0053). Note eligibleWhere applies NO gate filter —
     // blocked and date-gated tasks still duel, deliberately (0052, 0053).
     return this.prisma.task.findMany({
-      where: this.eligibleWhere(listId),
+      where: this.eligibleWhere(listId, exclude),
       include: TASK_INCLUDE,
     });
   }
@@ -118,8 +121,8 @@ export class ArenaSessionService {
    * thing to try, and the answer is "add another", not an error (0047). Counting and
    * starting in one call also means there is no gap between the two.
    */
-  async start(listId: string | null = null): Promise<StartOutcome> {
-    const tasks = await this.eligibleTasks(listId);
+  async start(listId: string | null = null, exclude?: string[]): Promise<StartOutcome> {
+    const tasks = await this.eligibleTasks(listId, exclude);
     if (tasks.length < MIN_POOL) {
       return { status: 'need-more-tasks', activeCount: tasks.length };
     }
@@ -240,9 +243,9 @@ export class ArenaSessionService {
    * believes is the fold of your taps so far. Rounded here only because it is crossing
    * the wire; the session itself keeps full precision (0047).
    */
-  async nextPair(sessionId: string): Promise<NextPairResult> {
+  async nextPair(sessionId: string, exclude?: string[]): Promise<NextPairResult> {
     const session = this.require(sessionId);
-    const tasks = await this.eligibleTasks(session.listId);
+    const tasks = await this.eligibleTasks(session.listId, exclude);
     if (tasks.length < MIN_POOL) {
       // Nothing is on the table, so no tap can be valid until a pair is dealt again.
       session.dealId = null;

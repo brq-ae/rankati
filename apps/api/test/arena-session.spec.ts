@@ -115,6 +115,59 @@ describe('ArenaSession (real Postgres)', () => {
     }
   });
 
+  describe('pending-delete exclude on the deal (ADR 0092)', () => {
+    it('excluding a task drops it from the pool — below two → need-more-tasks', async () => {
+      const [a] = await seed(2); // a + one more
+      const outcome = await arena.start(listId, [a]); // only the other is eligible
+      expect(outcome.status).toBe('need-more-tasks');
+      if (outcome.status === 'need-more-tasks') expect(outcome.activeCount).toBe(1);
+    });
+
+    it('an excluded task is never dealt; the rest still are', async () => {
+      const [a, b, c] = await seed(3);
+      const outcome = await arena.start(listId, [a]);
+      if (outcome.status !== 'started') throw new Error(`expected started, got ${outcome.status}`);
+      const seen = new Set<string>();
+      for (let i = 0; i < 20; i++) {
+        const next = await arena.nextPair(outcome.session.id, [a]);
+        if (next.status === 'pair') {
+          seen.add(next.pair.a.id);
+          seen.add(next.pair.b.id);
+        }
+      }
+      expect(seen.has(a)).toBe(false); // excluded, never dealt
+      expect(seen.has(b)).toBe(true);
+      expect(seen.has(c)).toBe(true);
+    });
+
+    it('no exclude leaves the full pool dealable', async () => {
+      await seed(2);
+      const outcome = await arena.start(listId); // undefined exclude
+      expect(outcome.status).toBe('started');
+      if (outcome.status === 'started') {
+        expect((await arena.nextPair(outcome.session.id)).status).toBe('pair');
+      }
+    });
+
+    it('a pair already on screen still resolves its tap after one task is excluded (exclude shapes only the next deal)', async () => {
+      await seed(3);
+      const outcome = await arena.start(listId);
+      if (outcome.status !== 'started') throw new Error(`expected started, got ${outcome.status}`);
+      const sid = outcome.session.id;
+      const first = await arena.nextPair(sid); // deals a pair + sets the live dealId
+      if (first.status !== 'pair') throw new Error('expected a pair');
+      const { dealId, a: pa, b: pb } = first.pair;
+      // The user pending-deletes pa; the on-screen tap must still resolve (validated by dealId, not the pool).
+      expect(() => arena.submitResult(sid, pa.id, pb.id, dealId)).not.toThrow();
+      // The NEXT deal excludes pa.
+      const next = await arena.nextPair(sid, [pa.id]);
+      if (next.status === 'pair') {
+        expect(next.pair.a.id).not.toBe(pa.id);
+        expect(next.pair.b.id).not.toBe(pa.id);
+      }
+    });
+  });
+
   it('refuses a task dueling itself', async () => {
     const [a] = await seed(2);
     const s = await startOk(listId);
