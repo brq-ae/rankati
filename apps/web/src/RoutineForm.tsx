@@ -88,17 +88,17 @@ export default function RoutineForm({
   const submit = () => {
     const n = name.trim();
     if (!n) return;
-    // Nag fields ride onto both create and edit; log-link is non-frequency only.
+    // Nag fields ride onto both create and edit; the log-link is available on ANY type now (ADR 0093).
     const nag = telegramNag ? { telegramNag: true, nagIntervalMinutes } : {};
-    const wantLink = type !== 'frequency' && linkLog;
+    const link = linkLog ? { linkLog: true } : {};
     if (!editing) {
-      const base = { name: n, type, on, ...nag };
+      const base = { name: n, type, on, ...nag, ...link };
       const dto: CreateRoutineDto =
         type === 'frequency'
           ? { ...base, periodUnit, targetCount }
           : type === 'interval_floating'
-            ? { ...base, intervalUnit, intervalCount, preferredWeekday, firstDue: due || undefined, ...(wantLink ? { linkLog: true } : {}) }
-            : { ...base, rule: buildRule(), ...(wantLink ? { linkLog: true } : {}) };
+            ? { ...base, intervalUnit, intervalCount, preferredWeekday, firstDue: due || undefined }
+            : { ...base, rule: buildRule() };
       onSubmit(dto, null);
       return;
     }
@@ -121,7 +121,7 @@ export default function RoutineForm({
     if (telegramNag !== (r.telegramNag ?? false)) dto.telegramNag = telegramNag;
     if (telegramNag && nagIntervalMinutes !== r.nagIntervalMinutes) dto.nagIntervalMinutes = nagIntervalMinutes;
     // Log-link (non-frequency only) — compare intent to the current linked state.
-    if (r.type !== 'frequency' && linkLog !== (r.linkedLogId != null)) dto.linkLog = linkLog;
+    if (linkLog !== (r.linkedLogId != null)) dto.linkLog = linkLog; // link available on any type (ADR 0093)
     onSubmit(dto, r.id);
   };
 
@@ -285,18 +285,17 @@ export default function RoutineForm({
               ⚠️ {nagWarning}
             </p>
           )}
-          {type !== 'frequency' && (
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={linkLog}
-                onChange={(e) => setLinkLog(e.target.checked)}
-                aria-label="Log each completion"
-                className="h-4 w-4 accent-primary"
-              />
-              <span className="text-sm">Log each completion (to a Log named after this routine)</span>
-            </label>
-          )}
+          {/* The log link is available on ANY type now (ADR 0093) — a linked frequency records ≤1 entry/day. */}
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={linkLog}
+              onChange={(e) => setLinkLog(e.target.checked)}
+              aria-label="Log each completion"
+              className="h-4 w-4 accent-primary"
+            />
+            <span className="text-sm">Log each completion (to a Log named after this routine)</span>
+          </label>
         </div>
 
         <div className="flex justify-end gap-2">

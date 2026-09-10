@@ -101,10 +101,12 @@ describe('Routine nag fields + log link (real Postgres, ADR 0091 M2)', () => {
     expect(await prisma.log.findFirst({ where: { id: logId } })).not.toBeNull(); // Log survives
   });
 
-  it('linkLog on a frequency routine is rejected (400) — on create and on update', async () => {
-    await expect(create({ ...freq, linkLog: true })).rejects.toBeInstanceOf(BadRequestException);
-    const f = await create(freq);
-    await expect(svc.update(f.id, { on: ON, linkLog: true })).rejects.toBeInstanceOf(BadRequestException);
+  it('linkLog on a frequency routine is now ALLOWED — on create and on update (ADR 0093)', async () => {
+    const created = await create({ ...freq, linkLog: true });
+    expect(created.linkedLogId).not.toBeNull();
+    const f = await create(freq); // unlinked
+    const linked = await svc.update(f.id, { on: ON, linkLog: true });
+    expect(linked.linkedLogId).not.toBeNull();
   });
 
   it('an unrelated edit does NOT rewrite the nag columns (empty-diff guard honored)', async () => {
@@ -156,6 +158,18 @@ describe('Routine nag fields + log link (real Postgres, ADR 0091 M2)', () => {
 
   // nagDid() — ✓ Did it from a nag: routes did/dismiss by type + the graceful log write.
   describe('nagDid() + setNagSkip()', () => {
+    it('did()/dismiss() stamp lastDidOn = the completion day (the per-day nag gate, ADR 0093)', async () => {
+      const f = await create({ type: 'frequency', periodUnit: 'week', targetCount: 7, telegramNag: true });
+      await svc.did(f.id, ON);
+      const fRow = await prisma.routine.findFirst({ where: { id: f.id } });
+      expect(fRow?.lastDidOn?.toISOString().slice(0, 10)).toBe(ON);
+
+      const fx = await create({ type: 'interval_fixed', rule: { kind: 'day_of_month', day: 21 }, telegramNag: true });
+      await svc.dismiss(fx.id, ON);
+      const fxRow = await prisma.routine.findFirst({ where: { id: fx.id } });
+      expect(fxRow?.lastDidOn?.toISOString().slice(0, 10)).toBe(ON); // dismiss counts as a completion day too
+    });
+
     it('frequency → +1; floating → advances nextDue; fixed → dismisses (routes did vs dismiss by type)', async () => {
       const f = await create({ type: 'frequency', periodUnit: 'day', targetCount: 3, telegramNag: true });
       expect((await svc.nagDid(f.id, ON)).periodCount).toBe(1);
@@ -173,6 +187,29 @@ describe('Routine nag fields + log link (real Postgres, ADR 0091 M2)', () => {
       expect(await prisma.logEntry.count({ where: { logId: r.linkedLogId! } })).toBe(1);
       await svc.nagDid(r.id, ON); // second nag same day → still one occurrence (0087 idempotency)
       expect(await prisma.logEntry.count({ where: { logId: r.linkedLogId! } })).toBe(1);
+    });
+
+    it('a linked FREQUENCY records ONE Log entry/day on did(), while its count still climbs (ADR 0093)', async () => {
+      const r = await create({ ...freq, linkLog: true }); // now allowed
+      expect(r.linkedLogId).not.toBeNull();
+      await svc.did(r.id, ON);
+      await svc.did(r.id, ON); // twice the same day
+      expect(await prisma.logEntry.count({ where: { logId: r.linkedLogId! } })).toBe(1); // ≤1 entry/day (0087)
+      const row = await prisma.routine.findFirst({ where: { id: r.id } });
+      expect(row?.periodCount).toBe(2); // the routine's weekly/daily count still climbs
+    });
+
+    it('an in-app did() on a linked routine records the Log too — not only the Telegram nag path (ADR 0093)', async () => {
+      const r = await svc.create({ name: `${P}Floss`, on: ON, ...floating, linkLog: true } as CreateRoutineDto);
+      await svc.did(r.id, ON); // the IN-APP completion, NOT nagDid
+      expect(await prisma.logEntry.count({ where: { logId: r.linkedLogId! } })).toBe(1);
+    });
+
+    it('an unlinked routine writes no Log on did()', async () => {
+      const r = await create({ ...floating }); // no linkLog
+      expect(r.linkedLogId).toBeNull();
+      await svc.did(r.id, ON);
+      expect(await prisma.log.count({ where: { name: r.name } })).toBe(0);
     });
 
     it('gracefully handles a DELETED linked Log — routine still satisfied, no crash', async () => {

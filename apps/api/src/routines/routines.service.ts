@@ -85,8 +85,8 @@ export class RoutinesService {
   /**
    * Resolve the reminder→log link (ADR 0091 M2) — a NAME-BASED toggle: `linkLog: true` find-or-creates a
    * Log named after the routine (case-insensitive) and returns its id; `false` unlinks (never deletes the
-   * Log); `undefined` = no change. Non-frequency only — the caller rejects it on a frequency routine.
-   * Returns `undefined` when nothing changes so the caller omits the column from the write.
+   * Log); `undefined` = no change. Available on ANY type (ADR 0093, superseding 0091's frequency exclusion):
+   * a linked frequency records ≤1 Log entry/day. Returns `undefined` when nothing changes so the caller omits it.
    */
   private async resolveLinkedLogId(
     linkLog: boolean | undefined,
@@ -227,11 +227,9 @@ export class RoutinesService {
       throw new BadRequestException('type must be frequency, interval_floating or interval_fixed');
     }
 
-    // Telegram nag fields (ADR 0091 M2) — apply to any type. The log link is non-frequency only.
+    // Telegram nag fields (ADR 0091 M2) — apply to any type. The log link is available on ANY type now
+    // (ADR 0093, superseding 0091's frequency exclusion): a linked frequency records ≤1 Log entry/day.
     const nag = this.resolveNag(dto, { telegramNag: false, nagIntervalMinutes: null });
-    if (dto.linkLog !== undefined && dto.type === 'frequency') {
-      throw new BadRequestException('linkLog is not available on a frequency routine');
-    }
     const linkedLogId = await this.resolveLinkedLogId(dto.linkLog, name, null);
 
     const row = await this.prisma.routine.create({
@@ -297,7 +295,8 @@ export class RoutinesService {
     }
 
     if (row.type === 'frequency') {
-      this.rejectForeign(dto, ['intervalUnit', 'intervalCount', 'preferredWeekday', 'nextDue', 'rule', 'linkLog']);
+      // `linkLog` is allowed on frequency now (ADR 0093) — a linked frequency records ≤1 Log entry/day.
+      this.rejectForeign(dto, ['intervalUnit', 'intervalCount', 'preferredWeekday', 'nextDue', 'rule']);
       if (dto.targetCount !== undefined) {
         if (!Number.isInteger(dto.targetCount) || dto.targetCount < 1) {
           throw new BadRequestException('targetCount must be a positive integer');
@@ -380,10 +379,27 @@ export class RoutinesService {
     await this.prisma.routine.delete({ where: { id: row.id } });
   }
 
-  /** "Did it" — frequency +1 (resetting a rolled-over period first); floating resets its clock. */
+  /**
+   * Record today's occurrence in a linked Log on completion (ADR 0091, corrected in 0093). Lives on the
+   * COMPLETION methods (`did`/`dismiss`) — NOT only the Telegram nag — so an in-app "Did it" records too.
+   * Deleted-log-safe: an owner-scoped 404 from `logs.did` is swallowed so the routine stays satisfied.
+   * Idempotent per calendar day (Logs are ≤1 entry/day, 0087), so a frequency routine done twice in a day
+   * bumps the count twice but marks the Log once — the deliberate day-granular behavior.
+   */
+  private async recordLinkedLog(linkedLogId: string | null, on: string): Promise<void> {
+    if (!linkedLogId) return;
+    try {
+      await this.logs.did(linkedLogId, on);
+    } catch (err) {
+      if (!(err instanceof NotFoundException)) throw err; // a deleted linked Log → skip; still satisfied
+    }
+  }
+
+  /** "Did it" — frequency +1 (resetting a rolled-over period first); floating resets its clock. Records a
+   *  linked Log (0093), deleted-log-safe. */
   async did(id: string, on?: string): Promise<RoutineDto> {
     const onStr = requireDay(on, 'on');
-    return this.prisma.$transaction(async (tx) => {
+    const { dto, linkedLogId } = await this.prisma.$transaction(async (tx) => {
       const row = await tx.routine.findFirst({ where: { id, ownerId: LOCAL_OWNER_ID } });
       if (!row) throw new NotFoundException(`routine ${id} not found`);
       if (row.type === 'frequency') {
@@ -393,34 +409,46 @@ export class RoutinesService {
           data: {
             periodStart: toDate(periodStartOf(row.periodUnit!, onStr)),
             periodCount: (stale ? 0 : row.periodCount!) + 1,
+            lastDidOn: toDate(onStr), // silences the nag for the rest of this local day (ADR 0093)
           },
         });
-        return this.toDto(updated, onStr);
+        return { dto: this.toDto(updated, onStr), linkedLogId: row.linkedLogId };
       }
       if (row.type === 'interval_floating') {
         const updated = await tx.routine.update({
           where: { id: row.id },
-          data: { nextDue: toDate(nextFloatingDue(onStr, row.intervalUnit! as IntervalUnit, row.intervalCount!, row.preferredWeekday)) },
+          data: {
+            nextDue: toDate(nextFloatingDue(onStr, row.intervalUnit! as IntervalUnit, row.intervalCount!, row.preferredWeekday)),
+            lastDidOn: toDate(onStr), // uniform "last completion day" (ADR 0093); floating already self-suppresses via nextDue
+          },
         });
-        return this.toDto(updated, onStr);
+        return { dto: this.toDto(updated, onStr), linkedLogId: row.linkedLogId };
       }
       throw new BadRequestException('"Did it" applies to frequency and floating routines only');
     });
+    await this.recordLinkedLog(linkedLogId, onStr); // best-effort after the tx (matches the old nag ordering)
+    return dto;
   }
 
-  /** "Dismiss" — fixed reminders only; acknowledge the current occurrence so it recedes (persistent). */
+  /** "Dismiss" — fixed reminders only; acknowledge the current occurrence so it recedes (persistent).
+   *  Records a linked Log (0093), deleted-log-safe. */
   async dismiss(id: string, on?: string): Promise<RoutineDto> {
     const onStr = requireDay(on, 'on');
-    return this.prisma.$transaction(async (tx) => {
+    const { dto, linkedLogId } = await this.prisma.$transaction(async (tx) => {
       const row = await tx.routine.findFirst({ where: { id, ownerId: LOCAL_OWNER_ID } });
       if (!row) throw new NotFoundException(`routine ${id} not found`);
       if (row.type !== 'interval_fixed') {
         throw new BadRequestException('Dismiss applies to fixed routines only');
       }
       const occ = nextFixedOccurrence(ruleFromRow(row), onStr);
-      const updated = await tx.routine.update({ where: { id: row.id }, data: { acknowledgedDate: new Date(`${occ}T00:00:00.000Z`) } });
-      return this.toDto(updated, onStr);
+      const updated = await tx.routine.update({
+        where: { id: row.id },
+        data: { acknowledgedDate: new Date(`${occ}T00:00:00.000Z`), lastDidOn: toDate(onStr) }, // uniform last-completion day (ADR 0093)
+      });
+      return { dto: this.toDto(updated, onStr), linkedLogId: row.linkedLogId };
     });
+    await this.recordLinkedLog(linkedLogId, onStr);
+    return dto;
   }
 
   /** "Snooze" — any type; a display-only hide-until. Purely temporal; touches no schedule state. */
@@ -436,23 +464,14 @@ export class RoutinesService {
   }
 
   /**
-   * "✓ Did it" from a Telegram nag (ADR 0091 M2): satisfy by type — frequency/floating via `did`, fixed
-   * via `dismiss` — and, if the routine links a Log, also record today there via `logs.did`. GRACEFUL on a
-   * DELETED linked Log (the id is soft/unconstrained): an owner-scoped 404 is swallowed so the routine is
-   * still satisfied, never a crash.
+   * "✓ Did it" from a Telegram nag (ADR 0091 M2): satisfy by type — frequency/floating via `did`, fixed via
+   * `dismiss`. The linked-Log write now lives in those completion methods (ADR 0093), so a nag and an in-app
+   * "Did it" record identically; this is a pure router. 404 on a foreign/stale id.
    */
   async nagDid(id: string, on?: string): Promise<RoutineDto> {
     const onStr = requireDay(on, 'on');
     const row = await this.own(id); // 404 if foreign/stale
-    const dto = row.type === 'interval_fixed' ? await this.dismiss(id, onStr) : await this.did(id, onStr);
-    if (row.linkedLogId) {
-      try {
-        await this.logs.did(row.linkedLogId, onStr);
-      } catch (err) {
-        if (!(err instanceof NotFoundException)) throw err; // a deleted linked Log → skip; still satisfied
-      }
-    }
-    return dto;
+    return row.type === 'interval_fixed' ? this.dismiss(id, onStr) : this.did(id, onStr);
   }
 
   /**

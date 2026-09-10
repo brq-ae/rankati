@@ -172,11 +172,24 @@ describe('RoutinesView — Telegram nag & log-link (ADR 0091 M2)', () => {
     expect(unit.value).toBe('hours');
   });
 
-  it('the log-link toggle is hidden for frequency, shown for non-frequency types', async () => {
+  it('the log-link toggle shows for ALL types now, including frequency (ADR 0093)', async () => {
     await openNew();
-    expect(screen.queryByLabelText('Log each completion')).toBeNull(); // default type = frequency
+    expect(screen.getByLabelText('Log each completion')).not.toBeNull(); // default type = frequency — now shown
     fireEvent.change(screen.getByLabelText('Routine type'), { target: { value: 'interval_floating' } });
     expect(screen.getByLabelText('Log each completion')).not.toBeNull();
+  });
+
+  it('creating a FREQUENCY routine with the log link threads linkLog (ADR 0093)', async () => {
+    await openNew();
+    fireEvent.change(screen.getByLabelText('Routine name'), { target: { value: 'Walk – 5000 Steps' } });
+    // default type = frequency
+    fireEvent.click(screen.getByLabelText('Log each completion'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Walk – 5000 Steps', type: 'frequency', linkLog: true }),
+      ),
+    );
   });
 
   it('creating a floating routine with nag + link threads telegramNag/nagIntervalMinutes/linkLog', async () => {

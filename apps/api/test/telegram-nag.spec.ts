@@ -83,6 +83,38 @@ describe('TelegramNagService.evaluate (fake clock)', () => {
     expect(pushed[0].text).toBe('🔔 Water — 2/4 today');
   });
 
+  it('a WEEKLY frequency nag says "this week", not "today" (ADR 0093)', async () => {
+    candidates = [
+      cand({ id: 'r3', name: 'Walk – 5000 Steps', type: 'frequency', periodUnit: 'week' }, { progress: { count: 3, target: 7 } }),
+    ];
+    await svc.evaluate(local, '42');
+    expect(pushed[0].text).toBe('🔔 Walk – 5000 Steps — 3/7 this week');
+  });
+
+  it('is suppressed for the rest of the day once done today (lastDidOn == local.date), ADR 0093', async () => {
+    // The frequency bug: 3/7 < 7 so shouldNag is still true, but "Did it" today must silence the nag.
+    candidates = [
+      cand(
+        { id: 'r1', name: 'Walk', type: 'frequency', periodUnit: 'week', lastDidOn: new Date('2026-08-21T00:00:00Z') },
+        { progress: { count: 3, target: 7 } },
+      ),
+    ];
+    await svc.evaluate(local, '42');
+    expect(pushed).toEqual([]);
+    expect(marked).toEqual([]);
+  });
+
+  it('resumes nagging the next day (lastDidOn is yesterday), ADR 0093', async () => {
+    candidates = [
+      cand(
+        { id: 'r1', name: 'Walk', type: 'frequency', periodUnit: 'week', lastDidOn: new Date('2026-08-20T00:00:00Z') },
+        { progress: { count: 3, target: 7 } },
+      ),
+    ];
+    await svc.evaluate(local, '42');
+    expect(pushed).toHaveLength(1); // a new day, still under target → nag again
+  });
+
   it('does NOT push a routine that is not due / already satisfied (shouldNag false)', async () => {
     candidates = [cand({ id: 'r1', name: 'Walk', type: 'interval_floating' }, { shouldNag: false })];
     await svc.evaluate(local, '42');

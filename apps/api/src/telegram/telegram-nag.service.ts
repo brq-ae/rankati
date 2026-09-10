@@ -8,6 +8,9 @@ import { TelegramBotService } from './telegram-bot.service';
 import { encodeNagDid, encodeNagLater, encodeNagSkip } from './telegram-callback';
 
 const MINUTE_MS = 60_000;
+// The nag's per-period progress suffix (ADR 0093): "3/7 this week", not a hardcoded "today", for a weekly
+// or monthly frequency. Keyed by the routine's periodUnit; falls back to "today" for a daily/absent unit.
+const PERIOD_LABEL: Record<string, string> = { day: 'today', week: 'this week', month: 'this month', year: 'this year' };
 
 /**
  * Telegram nag-reminders (ADR 0091 M2) — the per-routine nag EVALUATION + proactive push, driven by the
@@ -41,6 +44,10 @@ export class TelegramNagService {
       const candidates = await this.routines.naggable(local.date);
       for (const { row, shouldNag, progress } of candidates) {
         if (!shouldNag) continue; // not due, or already satisfied this period
+        // Did-it-today gate (ADR 0093): a frequency routine has no per-day "done", so without this the nag
+        // keeps firing after "Did it" while still under the weekly/monthly target. Silence the rest of the
+        // local day; nagging resumes tomorrow (still under target). Redundant-but-harmless for floating/fixed.
+        if (row.lastDidOn && row.lastDidOn.toISOString().slice(0, 10) === local.date) continue;
         if (row.snoozedUntil && row.snoozedUntil.getTime() > now.getTime()) continue; // 😴 Later in effect
         if (row.nagSkipUntil && row.nagSkipUntil.getTime() > now.getTime()) continue; // Skip today in effect
         const interval = (row.nagIntervalMinutes ?? 60) * MINUTE_MS;
@@ -48,7 +55,7 @@ export class TelegramNagService {
 
         const text =
           row.type === 'frequency' && progress
-            ? `🔔 ${row.name} — ${progress.count}/${progress.target} today`
+            ? `🔔 ${row.name} — ${progress.count}/${progress.target} ${PERIOD_LABEL[row.periodUnit ?? 'day']}`
             : `🔔 ${row.name}`;
         const keyboard: TelegramReplyMarkup = {
           inline_keyboard: [

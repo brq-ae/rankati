@@ -414,6 +414,10 @@ model Routine {
   /// id (no FK): a deleted Log is handled gracefully at write time (owner-scoped `logs.did` 404s → the
   /// routine is still satisfied), never a dangling cascade.
   linkedLogId        String?
+  /// The last calendar day "Did it"/"Dismiss" completed this routine (ADR 0093). Silences the Telegram nag
+  /// for the rest of that local day — a frequency routine has no per-day "done", so without this the nagger
+  /// keeps pinging after a tap while still under the weekly/monthly target. NULL = never completed. Server-only.
+  lastDidOn          DateTime? @db.Date
 
   @@index([ownerId])
 }

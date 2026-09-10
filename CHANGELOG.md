@@ -5,6 +5,13 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.1] — 2026-09-09
+
+### Fixed
+
+- **Telegram reminders stop nagging you for the day once you tap "Did it."** For a "N times per week/month" reminder, tapping ✓ Did it now silences its Telegram nags for the rest of that day and they resume tomorrow — before, because you were still under the weekly target, it kept pinging the same day. The nag also now reads "3/7 this week" rather than a puzzling "3/7 today" for a weekly reminder.
+- **"N times per period" reminders can now keep a Log.** Turn on "Log each completion" for a frequency reminder (e.g. Walk – 5000 Steps) and tapping ✓ Did it records that day in a Log — from the app or from a Telegram nag. It records one entry per day (the reminder still keeps the full count), so you build a day-by-day history alongside the weekly tally. Completing a linked reminder in the app now records the Log too, not only from Telegram.
+
 ## [0.42.0] — 2026-08-28
 
 ### Added
