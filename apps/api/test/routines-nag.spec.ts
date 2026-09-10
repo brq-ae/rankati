@@ -228,4 +228,64 @@ describe('Routine nag fields + log link (real Postgres, ADR 0091 M2)', () => {
       expect(row?.snoozedUntil).toBeNull(); // did NOT touch the display snooze
     });
   });
+
+  // undoDid() — reverse a completion made today, per type (ADR 0094).
+  describe('undoDid() (ADR 0094)', () => {
+    const rowOf = (id: string) => prisma.routine.findFirst({ where: { id } });
+
+    it('frequency: reverses the count by one, flooring at 0', async () => {
+      const f = await create({ type: 'frequency', periodUnit: 'day', targetCount: 5 });
+      await svc.did(f.id, ON);
+      await svc.did(f.id, ON);
+      await svc.did(f.id, ON); // 3
+      expect((await rowOf(f.id))?.periodCount).toBe(3);
+      await svc.undoDid(f.id, ON);
+      expect((await rowOf(f.id))?.periodCount).toBe(2);
+      await svc.undoDid(f.id, ON);
+      await svc.undoDid(f.id, ON);
+      await svc.undoDid(f.id, ON); // 1 → 0 → floor 0
+      expect((await rowOf(f.id))?.periodCount).toBe(0);
+    });
+
+    it('floating: nextDue goes back to due-today', async () => {
+      const fl = await create({ ...floating, firstDue: ON });
+      expect((await svc.did(fl.id, ON)).nextDue! > ON).toBe(true); // advanced past today
+      expect((await svc.undoDid(fl.id, ON)).nextDue).toBe(ON); // due today again
+    });
+
+    it('fixed: un-acknowledges today', async () => {
+      const fx = await create({ type: 'interval_fixed', rule: { kind: 'day_of_month', day: 21 } });
+      await svc.dismiss(fx.id, ON);
+      expect((await rowOf(fx.id))?.acknowledgedDate).not.toBeNull();
+      await svc.undoDid(fx.id, ON);
+      expect((await rowOf(fx.id))?.acknowledgedDate).toBeNull();
+    });
+
+    it('clears lastDidOn (re-opens the nag)', async () => {
+      const f = await create({ ...freq });
+      await svc.did(f.id, ON);
+      expect((await rowOf(f.id))?.lastDidOn).not.toBeNull();
+      await svc.undoDid(f.id, ON);
+      expect((await rowOf(f.id))?.lastDidOn).toBeNull();
+    });
+
+    it("removes today's entry from a linked Log; an unlinked routine is a no-op", async () => {
+      const linked = await svc.create({ name: `${P}UndoLink`, on: ON, ...floating, linkLog: true } as CreateRoutineDto);
+      await svc.did(linked.id, ON);
+      expect(await prisma.logEntry.count({ where: { logId: linked.linkedLogId! } })).toBe(1);
+      await svc.undoDid(linked.id, ON);
+      expect(await prisma.logEntry.count({ where: { logId: linked.linkedLogId! } })).toBe(0);
+
+      const unlinked = await create({ ...floating });
+      await svc.did(unlinked.id, ON);
+      await expect(svc.undoDid(unlinked.id, ON)).resolves.toBeDefined(); // no Log call, no crash
+    });
+
+    it('a deleted linked Log does not crash undo (deleteMany removes 0 rows)', async () => {
+      const r = await svc.create({ name: `${P}UndoDelLog`, on: ON, ...floating, linkLog: true } as CreateRoutineDto);
+      await svc.did(r.id, ON);
+      await prisma.log.delete({ where: { id: r.linkedLogId! } });
+      await expect(svc.undoDid(r.id, ON)).resolves.toBeDefined();
+    });
+  });
 });

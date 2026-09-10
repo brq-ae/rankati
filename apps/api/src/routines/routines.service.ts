@@ -128,6 +128,8 @@ export class RoutinesService {
       telegramNag: r.telegramNag,
       nagIntervalMinutes: r.nagIntervalMinutes,
       linkedLogId: r.linkedLogId,
+      // The last completion day (ADR 0093), on the wire so the app can offer "Undo Did it" while == today (0094).
+      lastDidOn: dateStr(r.lastDidOn),
     };
     if (r.type === 'frequency') {
       // Compute-fresh-per-read (0059): when the period has rolled, BOTH the count and the start
@@ -472,6 +474,35 @@ export class RoutinesService {
     const onStr = requireDay(on, 'on');
     const row = await this.own(id); // 404 if foreign/stale
     return row.type === 'interval_fixed' ? this.dismiss(id, onStr) : this.did(id, onStr);
+  }
+
+  /**
+   * "Undo Did it" (ADR 0094) — reverse a completion made TODAY, whichever surface completed it (in-app "Did
+   * it" OR a Telegram nag ✓). Offered all day while `lastDidOn == today`. Per type: frequency count −1 (floor
+   * 0); floating `nextDue` back to due-today (the pre-did due isn't stored — this is mis-tap recovery, not a
+   * time-machine); fixed un-acknowledges today. ALL types: clear `lastDidOn` (re-opens today's nag) and remove
+   * today's entry from the linked Log (deleted-log-safe). Multi-tap-same-day edge: decrements the count by 1
+   * but resets the day-granular bits (lastDidOn/Log) as "not done today" — re-tap Did it to restore.
+   */
+  async undoDid(id: string, on?: string): Promise<RoutineDto> {
+    const onStr = requireDay(on, 'on');
+    const { dto, linkedLogId } = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.routine.findFirst({ where: { id, ownerId: LOCAL_OWNER_ID } });
+      if (!row) throw new NotFoundException(`routine ${id} not found`);
+      const clearLast = dateStr(row.lastDidOn) === onStr ? { lastDidOn: null } : {};
+      const updated = await tx.routine.update({
+        where: { id: row.id },
+        data:
+          row.type === 'frequency'
+            ? { periodCount: Math.max(0, (row.periodCount ?? 0) - 1), ...clearLast }
+            : row.type === 'interval_floating'
+              ? { nextDue: toDate(onStr), ...clearLast } // back to due-today
+              : { acknowledgedDate: null, ...clearLast }, // fixed: un-acknowledge
+      });
+      return { dto: this.toDto(updated, onStr), linkedLogId: row.linkedLogId };
+    });
+    if (linkedLogId) await this.logs.removeEntryOn(linkedLogId, onStr); // deleted-log-safe (deleteMany)
+    return dto;
   }
 
   /**

@@ -607,8 +607,11 @@ export interface Routine {
   telegramNag: boolean;
   /** Nag cadence in minutes (1 / 30 / 60 / 120), or null when nagging is off. */
   nagIntervalMinutes: number | null;
-  /** The linked Log's id (≤1/day routines only), or null. The form reads this as the link toggle's state. */
+  /** The linked Log's id, or null. The form reads this as the link toggle's state. */
   linkedLogId: string | null;
+  /** The last calendar day this routine was completed ("YYYY-MM-DD"), or null. When it equals the client's
+   *  local day the app offers "Undo Did it" (ADR 0094). */
+  lastDidOn: string | null;
 }
 
 /**

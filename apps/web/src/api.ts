@@ -283,6 +283,10 @@ export const deleteRoutine = async (id: string): Promise<void> => {
 export const routineDid = (id: string, on: string): Promise<Routine> =>
   request<Routine>(`/api/routines/${id}/did`, { method: 'POST', body: JSON.stringify({ on }) });
 
+/** Undo a routine completion made today (ADR 0094) — reverses the count/schedule + removes today's linked-Log entry. */
+export const undoRoutineDid = (id: string, on: string): Promise<Routine> =>
+  request<Routine>(`/api/routines/${id}/undo-did`, { method: 'POST', body: JSON.stringify({ on }) });
+
 export const routineDismiss = (id: string, on: string): Promise<Routine> =>
   request<Routine>(`/api/routines/${id}/dismiss`, { method: 'POST', body: JSON.stringify({ on }) });
 

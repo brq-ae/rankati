@@ -37,6 +37,7 @@ const routine = (over: Partial<Routine>): Routine => ({
   telegramNag: false,
   nagIntervalMinutes: null,
   linkedLogId: null,
+  lastDidOn: null,
   ...over,
 });
 const floating = (o: Partial<Routine>) => routine({ type: 'interval_floating', intervalUnit: 'week', intervalCount: 1, ...o });
@@ -57,6 +58,7 @@ beforeEach(() => {
   seq = 0;
   vi.mocked(api.getRoutines).mockResolvedValue([]);
   vi.mocked(api.routineDid).mockResolvedValue(routine({}));
+  vi.mocked(api.undoRoutineDid).mockResolvedValue(routine({}));
   vi.mocked(api.routineDismiss).mockResolvedValue(routine({}));
   vi.mocked(api.routineSnooze).mockResolvedValue(routine({}));
   vi.mocked(api.createRoutine).mockResolvedValue(routine({}));
@@ -113,6 +115,33 @@ describe('RoutinesView — actions', () => {
     render(<RoutinesView on={ON} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Pay rent' }));
     await waitFor(() => expect(api.routineDismiss).toHaveBeenCalledWith('f1', ON));
+  });
+
+  it('Undo shows only when done-today (lastDidOn === on) and calls undoRoutineDid (ADR 0094)', async () => {
+    vi.mocked(api.getRoutines).mockResolvedValue([
+      floating({ id: 'a', name: 'Not done', nextDue: '2026-01-20', lastDidOn: null }),
+      floating({ id: 'b', name: 'Done today', nextDue: '2026-01-20', lastDidOn: ON }),
+    ]);
+    render(<RoutinesView on={ON} />);
+    await screen.findByText('Not done');
+    expect(screen.queryByRole('button', { name: 'Undo Not done' })).toBeNull(); // not done → no Undo
+    fireEvent.click(screen.getByRole('button', { name: 'Undo Done today' }));
+    await waitFor(() => expect(api.undoRoutineDid).toHaveBeenCalledWith('b', ON));
+  });
+
+  it('a done-today FREQUENCY keeps "Did it" alongside Undo; a done-today FLOATING hides "Did it"', async () => {
+    vi.mocked(api.getRoutines).mockResolvedValue([
+      routine({ id: 'f', name: 'Walk', lastDidOn: ON }), // frequency (default type)
+      floating({ id: 'l', name: 'Vacuum', nextDue: '2026-01-20', lastDidOn: ON }),
+    ]);
+    render(<RoutinesView on={ON} />);
+    await screen.findByText('Walk');
+    // frequency: both Did it (add another) and Undo
+    expect(screen.queryByRole('button', { name: 'Did Walk' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo Walk' })).not.toBeNull();
+    // floating done-today: Did it hidden, Undo shown
+    expect(screen.queryByRole('button', { name: 'Did Vacuum' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo Vacuum' })).not.toBeNull();
   });
   it('Snooze preset → routineSnooze with a future ISO time', async () => {
     vi.mocked(api.getRoutines).mockResolvedValue([routine({ id: 's1', name: 'Stretch' })]);

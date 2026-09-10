@@ -48,6 +48,11 @@ export class RoutinesController {
     return this.routines.dismiss(id, dto?.on);
   }
 
+  @Post(':id/undo-did')
+  undoDid(@Param('id') id: string, @Body() dto: RoutineActionDto): Promise<Routine> {
+    return this.routines.undoDid(id, dto?.on);
+  }
+
   @Post(':id/snooze')
   snooze(@Param('id') id: string, @Body() dto: RoutineSnoozeDto): Promise<Routine> {
     return this.routines.snooze(id, dto?.until);

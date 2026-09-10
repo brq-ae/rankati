@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.2] — 2026-09-10
+
+### Added
+
+- **Undo a reminder "Did it" you tapped by mistake.** Once you mark a reminder done — in the app or by tapping ✓ on a Telegram nag — its row shows **"✓ done today"** with an **Undo** button, available all day. Undo puts it right back: an "N times per period" reminder's count drops by one, an every-N reminder becomes due again today, a fixed-date one is un-acknowledged, its Telegram nag re-opens, and if it keeps a Log, today's entry is removed. (A frequency reminder keeps its "Did it" button alongside, so you can still log another.)
+
 ## [0.42.1] — 2026-09-09
 
 ### Fixed

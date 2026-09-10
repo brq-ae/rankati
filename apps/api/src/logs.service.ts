@@ -188,4 +188,14 @@ export class LogsService {
     await this.prisma.logEntry.delete({ where: { id: entryId } });
     return this.findOne(logId, onStr);
   }
+
+  /**
+   * Remove a Log's occurrence for a given day, by (logId, day) — used when undoing a routine's "Did it"
+   * on a linked Log (ADR 0094). `@@unique([logId, doneOn])` guarantees ≤1 entry/day, so this removes
+   * exactly that one. `deleteMany` deletes 0 rows (a harmless no-op) when the entry, or the whole Log, is
+   * gone — so it is deleted-log-safe by construction and never 404s.
+   */
+  async removeEntryOn(logId: string, on: string): Promise<void> {
+    await this.prisma.logEntry.deleteMany({ where: { logId, doneOn: toDate(on) } });
+  }
 }

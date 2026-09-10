@@ -8,6 +8,7 @@ import {
   routineDid,
   routineDismiss,
   routineSnooze,
+  undoRoutineDid,
   updateRoutine,
 } from './api';
 import RoutineForm from './RoutineForm';
@@ -124,7 +125,8 @@ export default function RoutinesView({ on }: { on: string }) {
                   <p className={`text-xs ${overdue ? 'text-danger' : 'text-faint'}`}>{status(r)}</p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-1">
-                  {(r.type === 'frequency' || r.type === 'interval_floating') && (
+                  {/* "Did it" — frequency keeps it (you can add another today); floating hides it once done today. */}
+                  {(r.type === 'frequency' || (r.type === 'interval_floating' && r.lastDidOn !== on)) && (
                     <button
                       type="button"
                       onClick={() => void act(routineDid(r.id, on))}
@@ -134,7 +136,7 @@ export default function RoutinesView({ on }: { on: string }) {
                       Did it
                     </button>
                   )}
-                  {r.type === 'interval_fixed' && (
+                  {r.type === 'interval_fixed' && r.lastDidOn !== on && (
                     <button
                       type="button"
                       onClick={() => void act(routineDismiss(r.id, on))}
@@ -143,6 +145,20 @@ export default function RoutinesView({ on }: { on: string }) {
                     >
                       Dismiss
                     </button>
+                  )}
+                  {/* Done today → a legible ✓ state with Undo (ADR 0094), reversing the completion made today. */}
+                  {r.lastDidOn === on && (
+                    <span className="inline-flex items-center gap-1 text-xs text-faint">
+                      <span aria-hidden="true">✓ done today</span>
+                      <button
+                        type="button"
+                        onClick={() => void act(undoRoutineDid(r.id, on))}
+                        aria-label={`Undo ${r.name}`}
+                        className="touch-manipulation rounded-sm px-1.5 py-1 font-medium text-body ring-1 ring-field hover:bg-hover"
+                      >
+                        Undo
+                      </button>
+                    </span>
                   )}
                   <select
                     value=""
