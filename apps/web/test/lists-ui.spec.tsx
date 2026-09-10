@@ -13,7 +13,7 @@ import App from '../src/App';
  * explicitly — an unstubbed request throws rather than quietly returning the wrong body.
  */
 
-const LISTS: List[] = [{ id: 'l1', name: 'Work', ownerId: 'local' }];
+let LISTS: List[] = [{ id: 'l1', name: 'Work', ownerId: 'local', pinned: false }];
 
 const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -79,6 +79,7 @@ const ready = async () => {
 
 beforeEach(() => {
   localStorage.clear();
+  LISTS = [{ id: 'l1', name: 'Work', ownerId: 'local', pinned: false }];
   stubFetch();
 });
 afterEach(() => {
@@ -256,5 +257,46 @@ describe('the needs-a-hand row marker is a plain label, never amber (ADR 0071)',
     await ready();
 
     expect(screen.queryByLabelText('Needs a hand')).toBeNull();
+  });
+});
+
+describe('pin lists (ADR 0095)', () => {
+  it('renders lists in the server order (pinned first, then A–Z) — the client does not re-sort', async () => {
+    LISTS = [
+      { id: 'z', name: 'Zebra', ownerId: 'local', pinned: true }, // server floats the pinned one up
+      { id: 'a', name: 'Apple', ownerId: 'local', pinned: false },
+    ];
+    render(<App />);
+    await ready();
+    const names = screen
+      .getAllByRole('button', { name: /^Rename list / })
+      .map((b) => b.getAttribute('aria-label'));
+    expect(names).toEqual(['Rename list Zebra', 'Rename list Apple']); // pinned Zebra rendered first
+  });
+
+  it('the pin toggle PATCHes the list with { pinned: true }', async () => {
+    render(<App />);
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Work' }));
+    await waitFor(() =>
+      expect(patched.some((p) => p.url.includes('/api/lists/l1') && (p.body as { pinned?: boolean })?.pinned === true)).toBe(true),
+    );
+  });
+
+  it('the pinned icon is visibly different from the unpinned one — accent+filled vs muted+outline (ADR 0095 S4)', async () => {
+    // The old 📌 emoji ignored CSS color, so pinned looked identical; the SVG must make a REAL DOM difference.
+    LISTS = [
+      { id: 'z', name: 'Zebra', ownerId: 'local', pinned: true },
+      { id: 'a', name: 'Apple', ownerId: 'local', pinned: false },
+    ];
+    render(<App />);
+    await ready();
+    const pinnedBtn = screen.getByRole('button', { name: 'Unpin Zebra' });
+    const unpinnedBtn = screen.getByRole('button', { name: 'Pin Apple' });
+    expect(pinnedBtn.className).toContain('text-primary'); // accent when pinned
+    expect(unpinnedBtn.className).toContain('text-faint'); // muted when not
+    // and the SVG itself reflects it (fill respects currentColor now)
+    expect(pinnedBtn.querySelector('svg')?.getAttribute('fill')).toBe('currentColor'); // filled
+    expect(unpinnedBtn.querySelector('svg')?.getAttribute('fill')).toBe('none'); // outline
   });
 });

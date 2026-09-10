@@ -84,6 +84,8 @@ model List {
   name    String
   /// Single local owner until auth exists (ADRs 0026, 0039).
   ownerId String @default("local")
+  /// Pinned lists float to the TOP of the stack; unpinned stay alphabetical below (ADR 0095).
+  pinned  Boolean @default(false)
 
   tasks Task[]
 

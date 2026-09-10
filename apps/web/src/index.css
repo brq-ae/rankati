@@ -516,11 +516,33 @@ body,
   animation-fill-mode: forwards;
 }
 
+/*
+ * Pin toggle feedback (ADR 0095, S4): a small pop on the pin icon when tapped. Re-triggers on each toggle
+ * because the element is keyed by `pinned`, so React remounts it and the animation replays.
+ */
+@keyframes deck-pin-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.deck-pin-pop {
+  animation: deck-pin-pop 220ms ease-out;
+}
+
 /* Reduced motion: the ring and bar hold full for the window — the MEANING without the movement.
-   The undo still works; only the animation stops. */
+   The undo still works; only the animation stops. The pin pop and the list reorder animation are
+   likewise dropped (the state/order still change, just instantly). */
 @media (prefers-reduced-motion: reduce) {
   .deck-ring,
-  .deck-bar {
+  .deck-bar,
+  .deck-pin-pop {
     animation: none;
   }
 }

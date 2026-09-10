@@ -51,6 +51,8 @@ export interface List {
   name: string;
   /** Single local owner until auth exists (ADRs 0026, 0039). */
   ownerId: string;
+  /** Pinned lists float to the top of the stack; unpinned stay alphabetical below (ADR 0095). */
+  pinned: boolean;
 }
 
 /**
@@ -262,7 +264,10 @@ export interface CreateRequiredTaskDto {
 
 /** PATCH /lists/:id — renaming a list, the v0.1 gap. */
 export interface UpdateListDto {
-  name: string;
+  /** Rename (trimmed, non-empty) — omit to leave unchanged. */
+  name?: string;
+  /** Pin/unpin the list (ADR 0095) — omit to leave unchanged. */
+  pinned?: boolean;
 }
 
 /** POST /locations — owner server-stamped; uniqueness is case-insensitive, 400 on a dup (ADR 0061). */

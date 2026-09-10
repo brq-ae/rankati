@@ -11,6 +11,7 @@ import type {
 } from '@rankati/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Arena, { type ArenaHandle } from './Arena';
+import { PinIcon } from './PinIcon';
 import ConfirmDestructive from './ConfirmDestructive';
 import CreateAccount from './CreateAccount';
 import Login from './Login';
@@ -766,6 +767,30 @@ export default function App() {
     }
   }
 
+  /** Pin/unpin a list (ADR 0095) — pinned float to the top. Re-fetch so the new order (pinned-first,
+   *  then A–Z) comes back from the server rather than re-sorting on the client. The reorder is animated via
+   *  the View Transitions API where available (each list section carries a `viewTransitionName`), so the row
+   *  visibly slides to its new place; unsupported browsers and reduced-motion just jump (see below). */
+  async function onToggleListPin(id: string, pinned: boolean): Promise<void> {
+    setError(null);
+    try {
+      await updateList(id, { pinned });
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+      const startViewTransition = (
+        document as Document & { startViewTransition?: (cb: () => void | Promise<void>) => void }
+      ).startViewTransition;
+      if (startViewTransition && !reduce) {
+        startViewTransition.call(document, async () => {
+          await refresh(); // await the re-fetch so the transition captures the reordered DOM
+        });
+      } else {
+        await refresh(); // no View Transitions (or reduced motion) → instant reorder
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   /**
    * Set or clear what a task waits for (ADR 0053).
    *
@@ -1347,7 +1372,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.42.2 — undo Did it</p>
+            <p className="text-sm text-muted">v0.43.0 — pinned lists + links</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1646,6 +1671,9 @@ export default function App() {
                   return (
                     <section
                       key={list.id}
+                      // A per-list transition name so the View Transitions reorder (ADR 0095 S4) slides THIS
+                      // section to its new spot. `list-` prefix keeps it a valid CSS ident (uuids can start with a digit).
+                      style={{ viewTransitionName: `list-${list.id}` } as React.CSSProperties}
                       className="rounded-2xl bg-card p-4 shadow-sm ring-1 ring-edge"
                     >
                       <h2 className="mb-3 flex items-baseline justify-between gap-2">
@@ -1679,6 +1707,23 @@ export default function App() {
                           <span className="text-xs text-faint">
                             {own.filter((t) => t.status === 'active').length} active
                           </span>
+                          {/* Pin (ADR 0095) — pinned lists float to the top. An SVG pin (NOT the 📌 emoji,
+                              which ignores CSS color): filled+accent when pinned, outline+muted when not.
+                              The icon is keyed by `pinned` so it remounts and replays the pop on toggle. */}
+                          <button
+                            type="button"
+                            onClick={() => void onToggleListPin(list.id, !list.pinned)}
+                            aria-label={list.pinned ? `Unpin ${list.name}` : `Pin ${list.name}`}
+                            aria-pressed={list.pinned}
+                            title={list.pinned ? 'Unpin' : 'Pin to top'}
+                            className={`touch-manipulation grid place-items-center rounded-sm px-1 py-0.5 ${
+                              list.pinned ? 'text-primary' : 'text-faint hover:text-body'
+                            }`}
+                          >
+                            <span key={list.pinned ? 'on' : 'off'} className="deck-pin-pop inline-flex">
+                              <PinIcon filled={list.pinned} />
+                            </span>
+                          </button>
                           {/* Duel this list (v0.12). Disabled unless it has >= 2 ACTIVE tasks, judged
                               over the FULL `tasks` set — NOT `visibleTasks` — so an active location
                               filter can't disable a list the server would still duel (same discipline

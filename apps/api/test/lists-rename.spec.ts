@@ -58,11 +58,11 @@ describe('PATCH /lists/:id (real Postgres)', () => {
     expect((res.body as List).name).toBe(`${PREFIX} trimmed`);
   });
 
-  it('refuses an empty name', async () => {
+  it('refuses an empty name; an empty PATCH is a no-op (partial update, ADR 0095)', async () => {
     const list = await makeList();
-    await agent.patch(url(`/lists/${list.id}`)).send({ name: '   ' }).expect(400);
-    await agent.patch(url(`/lists/${list.id}`)).send({}).expect(400);
-    // ...and changed nothing.
+    await agent.patch(url(`/lists/${list.id}`)).send({ name: '   ' }).expect(400); // empty name still rejected
+    await agent.patch(url(`/lists/${list.id}`)).send({}).expect(200); // nothing to change → no-op, not 400
+    // ...and changed nothing either way.
     expect((await prisma.list.findUniqueOrThrow({ where: { id: list.id } })).name).toBe(
       `${PREFIX} before`,
     );
@@ -89,5 +89,29 @@ describe('PATCH /lists/:id (real Postgres)', () => {
     expect(after.listId).toBe(list.id);
     expect(after.title).toBe(`${PREFIX} t`);
     await prisma.task.delete({ where: { id: task.id } });
+  });
+
+  // Pin lists (ADR 0095) — the PATCH carries `pinned`; the read floats pinned to the top.
+  it('a pin-only PATCH (no name) sets pinned without 400, leaving the name unchanged', async () => {
+    const list = await makeList();
+    const res = await agent
+      .patch(url(`/lists/${list.id}`))
+      .send({ pinned: true } satisfies UpdateListDto)
+      .expect(200);
+    expect((res.body as List).pinned).toBe(true);
+    expect((res.body as List).name).toBe(`${PREFIX} before`); // name untouched
+    // toggle back off
+    const off = await agent.patch(url(`/lists/${list.id}`)).send({ pinned: false }).expect(200);
+    expect((off.body as List).pinned).toBe(false);
+  });
+
+  it('lists read floats pinned to the top, then alphabetical within each group (ADR 0095)', async () => {
+    const b = await prisma.list.create({ data: { name: `${PREFIX} B`, ownerId: LOCAL_OWNER_ID } });
+    await prisma.list.create({ data: { name: `${PREFIX} A`, ownerId: LOCAL_OWNER_ID } });
+    await prisma.list.create({ data: { name: `${PREFIX} C`, ownerId: LOCAL_OWNER_ID } });
+    await agent.patch(url(`/lists/${b.id}`)).send({ pinned: true }).expect(200); // pin B
+    const res = await agent.get(url('/lists')).expect(200);
+    const names = (res.body as List[]).filter((l) => l.name.startsWith(PREFIX)).map((l) => l.name);
+    expect(names).toEqual([`${PREFIX} B`, `${PREFIX} A`, `${PREFIX} C`]); // pinned B first, then A,C A–Z
   });
 });

@@ -224,6 +224,8 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    // Notes are display-by-default now (ADR 0095); ✎ reveals the textarea.
+    fireEvent.click(within(document.querySelector('dialog')!).getByLabelText('Edit notes'));
     const notes = within(document.querySelector('dialog')!).getByLabelText('Notes');
     fireEvent.change(notes, { target: { value: 'ring the vet\nbring records' } });
     fireEvent.blur(notes); // commit-on-blur only — no Enter (newlines are content)
@@ -240,6 +242,7 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
+    fireEvent.click(within(document.querySelector('dialog')!).getByLabelText('Edit notes'));
     const notes = within(document.querySelector('dialog')!).getByLabelText('Notes');
     fireEvent.change(notes, { target: { value: '' } });
     fireEvent.blur(notes);
@@ -252,8 +255,18 @@ describe('it edits through the SAME endpoints the row uses (0054)', () => {
     render(<App />);
     await openDetail('Alpha');
 
-    fireEvent.blur(within(document.querySelector('dialog')!).getByLabelText('Notes')); // no edit
+    fireEvent.click(within(document.querySelector('dialog')!).getByLabelText('Edit notes'));
+    fireEvent.blur(within(document.querySelector('dialog')!).getByLabelText('Notes')); // entered edit, changed nothing
     expect(sent.some((s) => s.url === '/api/tasks/a' && s.method === 'PATCH')).toBe(false);
+  });
+
+  it('a URL in the notes renders a clickable link in display mode (ADR 0095)', async () => {
+    TASKS = [task('a', 'Alpha', { notes: 'docs at https://rankati.com/help — read it' })];
+    render(<App />);
+    await openDetail('Alpha');
+    const a = within(document.querySelector('dialog')!).getByRole('link', { name: 'https://rankati.com/help' });
+    expect(a.getAttribute('target')).toBe('_blank');
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('sets the date through the same PATCH, with the wire format untouched', async () => {

@@ -79,6 +79,8 @@ const CUR = task({ id: 'cur', title: 'Current', checklist: [SECOND, FIRST, THIRD
 const heading = () => screen.getByText(/\d+ of \d+ done/);
 const checkboxFor = (text: string) => screen.getByRole('checkbox', { name: new RegExp(`"${text}"`) });
 const textboxFor = (text: string) => screen.getByLabelText(`Checklist item: ${text}`);
+// Items are display-by-default now (ADR 0095); ✎ enters edit and reveals the input.
+const editFor = (text: string) => screen.getByRole('button', { name: `Edit ${text}` });
 const removeFor = (text: string) => screen.getByRole('button', { name: `Remove "${text}"` });
 const upFor = (text: string) => screen.getByRole('button', { name: `Move "${text}" up` });
 const downFor = (text: string) => screen.getByRole('button', { name: `Move "${text}" down` });
@@ -143,6 +145,7 @@ describe('Checklist section (ADR 0071)', () => {
     // The input's accessible name is bound to the item's STORED text, not the live draft — it
     // does not relabel itself mid-edit — so the lookup stays keyed on the original text throughout.
     const { onUpdateChecklistItem } = renderDetail(CUR);
+    fireEvent.click(editFor('First')); // ✎ → enter edit
     fireEvent.change(textboxFor('First'), { target: { value: 'Renamed' } });
     fireEvent.blur(textboxFor('First'));
     expect(onUpdateChecklistItem).toHaveBeenCalledWith('cur', 'i1', { text: 'Renamed' });
@@ -150,18 +153,34 @@ describe('Checklist section (ADR 0071)', () => {
 
   it('rename commits on Enter', () => {
     const { onUpdateChecklistItem } = renderDetail(CUR);
+    fireEvent.click(editFor('Third')); // ✎ → enter edit
     fireEvent.change(textboxFor('Third'), { target: { value: 'Renamed third' } });
     fireEvent.keyDown(textboxFor('Third'), { key: 'Enter' });
     expect(onUpdateChecklistItem).toHaveBeenCalledWith('cur', 'i3', { text: 'Renamed third' });
   });
 
-  it('Escape cancels the draft — reverts to the item text, no call made', () => {
+  it('Escape cancels the draft — exits edit back to display, no call made', () => {
     const { onUpdateChecklistItem } = renderDetail(CUR);
+    fireEvent.click(editFor('First')); // ✎ → enter edit
     fireEvent.change(textboxFor('First'), { target: { value: 'Discard me' } });
     fireEvent.keyDown(textboxFor('First'), { key: 'Escape' });
-    expect(textboxFor('First')).toHaveProperty('value', 'First'); // reverted
-    fireEvent.blur(textboxFor('First'));
-    expect(onUpdateChecklistItem).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Checklist item: First')).toBeNull(); // edit exited → back to display
+    expect(editFor('First')).toBeTruthy(); // ✎ is back
+    expect(onUpdateChecklistItem).not.toHaveBeenCalled(); // draft discarded, nothing sent
+  });
+
+  it('a URL in an item is a clickable link in display mode; ✎ still edits an all-link item (ADR 0095)', () => {
+    const linkItem = item({ id: 'lk', text: 'https://rankati.com/x', position: 3, done: false });
+    const { onUpdateChecklistItem } = renderDetail(task({ id: 'cur', title: 'Current', checklist: [linkItem] }));
+    // Display: the whole item is a real anchor (new-tab, noopener).
+    const a = screen.getByRole('link', { name: 'https://rankati.com/x' });
+    expect(a.getAttribute('target')).toBe('_blank');
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+    // The all-link case still edits via ✎ (the reason we chose an explicit affordance over tap-to-edit).
+    fireEvent.click(editFor('https://rankati.com/x'));
+    fireEvent.change(textboxFor('https://rankati.com/x'), { target: { value: 'https://rankati.com/y' } });
+    fireEvent.blur(textboxFor('https://rankati.com/x'));
+    expect(onUpdateChecklistItem).toHaveBeenCalledWith('cur', 'lk', { text: 'https://rankati.com/y' });
   });
 
   it('remove calls delete with the task and item id', () => {

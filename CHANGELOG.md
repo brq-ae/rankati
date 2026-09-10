@@ -5,6 +5,13 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] — 2026-09-10
+
+### Added
+
+- **Pin lists to the top.** Each list now has a **📌** — pin the ones you reach for most and they float to the top of the Lists screen; everything else stays in alphabetical order below. Tap again to unpin.
+- **Clickable links in checklists and notes.** A web address in a checklist item or a task's notes is now a real link — tap it to open in a new tab. Items and notes show their text (with links live) by default; a small **✎** edits them, so an item that's nothing but a link is still editable. Links are the only thing made clickable and are rendered safely — pasted text can never inject anything.
+
 ## [0.42.2] — 2026-09-10
 
 ### Added

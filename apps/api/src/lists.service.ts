@@ -16,6 +16,7 @@ function toListDto(list: List): ListDto {
     id: list.id,
     name: list.name,
     ownerId: list.ownerId,
+    pinned: list.pinned,
   };
 }
 
@@ -27,7 +28,8 @@ export class ListsService {
     // Scoped by owner from day one, so auth needs no retrofit (ADRs 0026, 0039).
     const lists = await this.prisma.list.findMany({
       where: { ownerId: LOCAL_OWNER_ID },
-      orderBy: { name: 'asc' },
+      // Pinned lists float to the top; unpinned stay alphabetical below (ADR 0095).
+      orderBy: [{ pinned: 'desc' }, { name: 'asc' }],
     });
     return lists.map(toListDto);
   }
@@ -39,17 +41,26 @@ export class ListsService {
    * in the lookup rather than trusting the id alone (0026, 0039).
    */
   async update(id: string, dto: UpdateListDto): Promise<ListDto> {
-    const name = typeof dto?.name === 'string' ? dto.name.trim() : '';
-    if (!name) {
-      throw new BadRequestException('name is required');
+    // Partial (ADR 0095): rename (`name`) and/or pin (`pinned`) — a pin toggle carries no name, so name is
+    // validated ONLY when present and may never be cleared to empty.
+    const data: { name?: string; pinned?: boolean } = {};
+    if (dto?.name !== undefined) {
+      const name = typeof dto.name === 'string' ? dto.name.trim() : '';
+      if (!name) throw new BadRequestException('name is required');
+      data.name = name;
+    }
+    if (dto?.pinned !== undefined) {
+      if (typeof dto.pinned !== 'boolean') throw new BadRequestException('pinned must be a boolean');
+      data.pinned = dto.pinned;
     }
 
     const list = await this.prisma.list.findFirst({ where: { id, ownerId: LOCAL_OWNER_ID } });
     if (!list) {
       throw new NotFoundException(`list ${id} not found`);
     }
+    if (Object.keys(data).length === 0) return toListDto(list); // nothing to change
 
-    const updated = await this.prisma.list.update({ where: { id: list.id }, data: { name } });
+    const updated = await this.prisma.list.update({ where: { id: list.id }, data });
     return toListDto(updated);
   }
 

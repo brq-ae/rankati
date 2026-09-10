@@ -10,6 +10,7 @@ import type {
   UpdateChecklistItemDto,
 } from '@rankati/shared';
 import { useEffect, useRef, useState } from 'react';
+import { Linkified } from './Linkified';
 import ListPickerField from './ListPickerField';
 import { EFFORTS, type Thresholds, bucketLabel } from './effort-prefs';
 import { isGated, isWindowOpen, localDay, localTime } from './local-day';
@@ -207,6 +208,10 @@ export default function TaskDetail({
   const creatingRef = useRef(false);
   const [draftTitle, setDraftTitle] = useState(task?.title ?? '');
   const [draftNotes, setDraftNotes] = useState(task?.notes ?? '');
+  // Win 2 (ADR 0095): checklist items + notes are display-by-default (links clickable via <Linkified>);
+  // a ✎ enters edit using the existing input/textarea, so an all-link item is still editable.
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingNotes, setEditingNotes] = useState(false);
   /**
    * The picker's state is modal-local: nothing outside needs it, and it resets when the
    * modal closes — a stale query waiting on reopen would be wrong.
@@ -1228,20 +1233,50 @@ export default function TaskDetail({
                     aria-label={item.done ? `Mark "${item.text}" not done` : `Mark "${item.text}" done`}
                     className="shrink-0"
                   />
-                  <input
-                    value={draftFor(item)}
-                    onChange={(e) => setDraftFor(item.id, e.target.value)}
-                    onBlur={() => commitItemText(item)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitItemText(item);
-                      else if (e.key === 'Escape') clearDraft(item.id); // discard the draft, keep item.text
-                    }}
-                    aria-label={`Checklist item: ${item.text}`}
-                    className={`min-w-0 flex-1 rounded-sm border border-transparent bg-transparent px-1 py-0.5 outline-none focus:border-field focus:bg-field-bg ${
-                      item.done ? 'text-faint line-through' : 'text-strong'
-                    }`}
-                  />
+                  {editingItemId === item.id ? (
+                    <input
+                      value={draftFor(item)}
+                      onChange={(e) => setDraftFor(item.id, e.target.value)}
+                      onBlur={() => {
+                        commitItemText(item);
+                        setEditingItemId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          commitItemText(item);
+                          setEditingItemId(null);
+                        } else if (e.key === 'Escape') {
+                          clearDraft(item.id); // discard the draft, keep item.text
+                          setEditingItemId(null);
+                        }
+                      }}
+                      aria-label={`Checklist item: ${item.text}`}
+                      autoFocus
+                      className={`min-w-0 flex-1 rounded-sm border border-field bg-field-bg px-1 py-0.5 outline-none focus:border-primary ${
+                        item.done ? 'text-faint line-through' : 'text-strong'
+                      }`}
+                    />
+                  ) : (
+                    // Display-by-default (ADR 0095): links are clickable; ✎ enters edit (works even when the
+                    // whole item is a link). React text nodes → XSS-safe, no raw HTML.
+                    <span className={`min-w-0 flex-1 break-words px-1 py-0.5 ${item.done ? 'text-faint line-through' : 'text-strong'}`}>
+                      {item.text ? <Linkified text={item.text} /> : <span className="text-faint">(empty)</span>}
+                    </span>
+                  )}
                   <div className="flex shrink-0 items-center gap-0.5">
+                    {editingItemId !== item.id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearDraft(item.id); // start the edit from the current text
+                          setEditingItemId(item.id);
+                        }}
+                        aria-label={`Edit ${item.text}`}
+                        className="touch-manipulation rounded-sm px-1 text-xs text-faint hover:text-strong-hover"
+                      >
+                        ✎
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => swapPositions(item, checklist[idx - 1]!)}
@@ -1309,18 +1344,46 @@ export default function TaskDetail({
         {/* Notes (ADR 0090) — free-text, INERT: shown and edited here, never read by the engine. A
             promoted idea's body lands here (convert copies it). Commit on blur only; newlines are
             content, so there is no Enter-to-submit. An empty box clears the notes (server → null). */}
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted">Notes</span>
-          <textarea
-            value={draftNotes}
-            onChange={(e) => setDraftNotes(e.target.value)}
-            onBlur={commitNotes}
-            rows={3}
-            aria-label="Notes"
-            placeholder="Anything worth remembering…"
-            className="touch-manipulation resize-y rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
-          />
-        </label>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted">Notes</span>
+            {!editingNotes && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftNotes(task.notes ?? '');
+                  setEditingNotes(true);
+                }}
+                aria-label="Edit notes"
+                className="touch-manipulation rounded-sm px-1 text-xs text-faint hover:text-body"
+              >
+                ✎
+              </button>
+            )}
+          </div>
+          {editingNotes ? (
+            <textarea
+              value={draftNotes}
+              onChange={(e) => setDraftNotes(e.target.value)}
+              onBlur={() => {
+                commitNotes();
+                setEditingNotes(false);
+              }}
+              rows={3}
+              aria-label="Notes"
+              placeholder="Anything worth remembering…"
+              autoFocus
+              className="touch-manipulation resize-y rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+            />
+          ) : task.notes ? (
+            // Display-by-default (ADR 0095): links clickable, newlines preserved; XSS-safe React nodes.
+            <p className="whitespace-pre-wrap break-words text-sm text-body">
+              <Linkified text={task.notes} />
+            </p>
+          ) : (
+            <p className="text-sm text-faint">Anything worth remembering…</p>
+          )}
+        </div>
       </div>
     </dialog>
   );
