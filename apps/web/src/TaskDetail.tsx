@@ -103,6 +103,9 @@ interface TaskDetailProps {
   onRename: (id: string, title: string) => void;
   /** Set the inert free-text notes (ADR 0090) — commit-on-blur; '' clears (server → null). */
   onSetNotes: (id: string, value: string) => void;
+  /** Set the Venue link (ADR 0096) — a Google-Maps url; commit-on-blur/Enter; '' clears (server → null,
+   * incl. the cached coords). The server best-effort resolves coords/name when it changes. */
+  onSetVenue: (id: string, value: string) => void;
   /** Move the task to another list — changes only its listId (ADR 0056 follow-on). */
   onSetList: (id: string, listId: string) => void;
   onSetNotBefore: (id: string, value: string) => void;
@@ -181,6 +184,7 @@ export default function TaskDetail({
   onClose,
   onRename,
   onSetNotes,
+  onSetVenue,
   onSetList,
   onSetNotBefore,
   onSetDue,
@@ -208,6 +212,8 @@ export default function TaskDetail({
   const creatingRef = useRef(false);
   const [draftTitle, setDraftTitle] = useState(task?.title ?? '');
   const [draftNotes, setDraftNotes] = useState(task?.notes ?? '');
+  const [draftVenue, setDraftVenue] = useState(task?.venueUrl ?? '');
+  const [editingVenue, setEditingVenue] = useState(false);
   // Win 2 (ADR 0095): checklist items + notes are display-by-default (links clickable via <Linkified>);
   // a ✎ enters edit using the existing input/textarea, so an all-link item is still editable.
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -548,6 +554,22 @@ export default function TaskDetail({
   const commitNotes = () => {
     if (draftNotes !== (task.notes ?? '')) onSetNotes(task.id, draftNotes);
   };
+  // Commit the Venue link on blur/Enter, no-op guarded like notes: only PATCH when it actually changed,
+  // since any venue write re-runs the server resolver + clears needsDetails. Trimmed here so a stray space
+  // never counts as a change; '' and a stored null are the same (server maps '' → null).
+  const commitVenue = () => {
+    const next = draftVenue.trim();
+    if (next !== (task.venueUrl ?? '')) onSetVenue(task.id, next);
+  };
+  // The Waze deep-link (ADR 0096), from the SAVED venue only: coords → turn-by-turn `?ll`; else a place
+  // name → a `?q=` search; else there is nothing to route to and the button hides. Mirrors the server's
+  // resolve fallback. venueLat/Lng are only ever both-set or both-null (server writes them together).
+  const wazeUrl =
+    task.venueLat != null && task.venueLng != null
+      ? `https://waze.com/ul?ll=${task.venueLat},${task.venueLng}&navigate=yes`
+      : task.venueName
+        ? `https://waze.com/ul?q=${encodeURIComponent(task.venueName)}`
+        : null;
   const commitTitle = () => {
     if (draftTitle.trim() && draftTitle !== task.title) onRename(task.id, draftTitle);
   };
@@ -1382,6 +1404,80 @@ export default function TaskDetail({
             </p>
           ) : (
             <p className="text-sm text-faint">Anything worth remembering…</p>
+          )}
+        </div>
+
+        {/* Venue (ADR 0096, meetings epic Build 2) — a per-task PLACE, DISTINCT from context-Location
+            (0060, which tags where a task can be done). Paste a Google Maps link; after save it drives two
+            buttons: G-Maps opens the saved link verbatim (deep-links the app on mobile, NO server call),
+            Waze navigates by the server-resolved coords (or a name search, or hides). Same display-by-default
+            + ✎ pattern as Notes (ADR 0095); commit on blur/Enter, empty clears (server → null incl. coords). */}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted">Venue</span>
+            {!editingVenue && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftVenue(task.venueUrl ?? '');
+                  setEditingVenue(true);
+                }}
+                aria-label="Edit venue"
+                className="touch-manipulation rounded-sm px-1 text-xs text-faint hover:text-body"
+              >
+                ✎
+              </button>
+            )}
+          </div>
+          {editingVenue ? (
+            <input
+              type="url"
+              inputMode="url"
+              value={draftVenue}
+              onChange={(e) => setDraftVenue(e.target.value)}
+              onBlur={() => {
+                commitVenue();
+                setEditingVenue(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitVenue();
+                  setEditingVenue(false);
+                }
+              }}
+              aria-label="Venue"
+              placeholder="Paste a Google Maps link…"
+              autoFocus
+              className="touch-manipulation rounded-xl border border-field bg-field-bg px-2 py-1 text-sm outline-none focus:border-primary"
+            />
+          ) : task.venueUrl ? (
+            // Saved-state buttons. rel=noopener noreferrer on every external link (0096); Waze hidden when
+            // there is nothing to route to — G-Maps ALWAYS works because it only needs the stored url.
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={task.venueUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open in Google Maps"
+                className="touch-manipulation rounded-xl border border-field bg-control-bg px-3 py-1 text-sm font-medium text-body hover:bg-hover"
+              >
+                G-Maps
+              </a>
+              {wazeUrl && (
+                <a
+                  href={wazeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Navigate in Waze"
+                  className="touch-manipulation rounded-xl border border-field bg-control-bg px-3 py-1 text-sm font-medium text-body hover:bg-hover"
+                >
+                  Waze
+                </a>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-faint">Paste a Google Maps link…</p>
           )}
         </div>
       </div>

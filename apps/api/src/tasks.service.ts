@@ -12,6 +12,7 @@ import type {
 import { ArenaSessionService } from './arena/arena-session.service';
 import { LOCAL_OWNER_ID } from './constants';
 import { Prisma, type Task } from './generated/prisma/client';
+import { MapsResolverService } from './maps-resolver.service';
 import { PrismaService } from './prisma.service';
 import { TASK_INCLUDE, type TaskWithRelations, toTaskDto } from './task-mapper';
 import { dayOfWeekOf, windowOpen } from './today/availability-window';
@@ -134,6 +135,31 @@ function parseNotes(value: unknown): string | null {
 }
 
 /**
+ * A venue link (ADR 0096) → its stored form. Same tri-state/trim as notes: null or an empty/whitespace-only
+ * string clears the venue, a string sets it (trimmed). Shape-validated only — it must be a syntactically
+ * valid http(s) URL, so a fat-fingered non-url is a 400 rather than a stored dud that silently never
+ * resolves. The SSRF host allowlist is NOT enforced here (that is the resolver's job, best-effort at
+ * resolve-time); a valid-but-non-Google url is stored and simply yields no coords. A non-string, non-null
+ * value is the caller's bug (400).
+ */
+function parseVenueUrl(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') throw new BadRequestException('venueUrl must be a string or null');
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new BadRequestException('venueUrl must be a valid URL');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new BadRequestException('venueUrl must be an http(s) URL');
+  }
+  return trimmed;
+}
+
+/**
  * The client's local TIME of day, validated — the second half of the clock context (0070).
  * Zero-padded 24h is strict for the same reason `on` is: the window check compares 'HH:MM'
  * strings, and only the zero-padded form compares chronologically ('9:30' sorts AFTER
@@ -161,6 +187,7 @@ export class TasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly arena: ArenaSessionService,
+    private readonly mapsResolver: MapsResolverService,
   ) {}
 
   /**
@@ -773,6 +800,16 @@ export class TasksService {
       data.notes = parseNotes(dto.notes);
     }
 
+    // Venue link (ADR 0096) — store the url verbatim (tri-state/trim like notes). The best-effort resolve
+    // of coords/name happens AFTER the task is loaded below, so it can compare against the OLD url and only
+    // re-resolve when the url actually CHANGES (the resolve is a network round-trip; unchanged url = no call).
+    const venueInDto = 'venueUrl' in dto;
+    let nextVenueUrl: string | null = null;
+    if (venueInDto) {
+      nextVenueUrl = parseVenueUrl(dto.venueUrl);
+      data.venueUrl = nextVenueUrl;
+    }
+
     // Dependencies are not a column, so they are not part of `data` — they are rows in a
     // join table, replaced in the same transaction below.
     let nextDependencies: string[] | null = null;
@@ -796,7 +833,7 @@ export class TasksService {
     // say — look exactly like a successful edit.
     if (Object.keys(data).length === 0 && nextDependencies === null && nextLocations === null) {
       throw new BadRequestException(
-        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, or any combination',
+        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, venueUrl, or any combination',
       );
     }
 
@@ -815,6 +852,24 @@ export class TasksService {
     });
     if (!task) {
       throw new NotFoundException(`task ${id} not found`);
+    }
+
+    // Venue coords/name are a CACHE of venueUrl — refresh them ONLY when the url actually changed (ADR 0096).
+    // Clearing the url (null) clears the cache too. Setting/changing it best-effort resolves: SUCCESS fills
+    // lat/lng/name, a FAILURE (bad host, blocked IP, timeout, no coords) leaves them null — never fatal, so
+    // G-Maps (which only needs the stored url) always works and Waze simply hides. An unchanged url skips the
+    // network entirely. Coords/name are server-derived; the client cannot write them.
+    if (venueInDto && nextVenueUrl !== task.venueUrl) {
+      if (nextVenueUrl === null) {
+        data.venueLat = null;
+        data.venueLng = null;
+        data.venueName = null;
+      } else {
+        const resolved = await this.mapsResolver.resolve(nextVenueUrl);
+        data.venueLat = resolved.lat ?? null;
+        data.venueLng = resolved.lng ?? null;
+        data.venueName = resolved.name ?? null;
+      }
     }
 
     // One transaction: a half-applied edit would leave the task's gates in a state the

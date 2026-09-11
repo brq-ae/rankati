@@ -229,6 +229,17 @@ export interface Task {
    */
   notes: string | null;
   /**
+   * Venue (ADR 0096, meetings epic Build 2) — a per-task place, DISTINCT from context-Location (0060).
+   * `venueUrl` is a Google-Maps link the owner pastes, stored verbatim; it always drives the G-Maps button
+   * with NO server call. `venueLat`/`venueLng` are a best-effort server-side expansion of that link (Waze
+   * deep-link); `venueName` is the place-name fallback when the link carries no coords. All null = no venue.
+   * Coords/name are a cache of the URL, re-derived only when `venueUrl` changes (best-effort, non-fatal).
+   */
+  venueUrl: string | null;
+  venueLat: number | null;
+  venueLng: number | null;
+  venueName: string | null;
+  /**
    * The deadline task whose urgency, propagated backward, drives THIS task's rank (ADR 0059).
    *
    * OPTIONAL because it is a property of a READ, not of a task: the same task carries it on the
@@ -426,6 +437,19 @@ export interface UpdateTaskDto {
    * Editing notes is a real field edit, so it clears `needsDetails` (0073) like any other field.
    */
   notes?: string | null;
+  /**
+   * Venue link (ADR 0096) — a Google-Maps URL, tri-state like `notes`:
+   *   omitted -> leave the venue exactly as it is
+   *   value   -> set it (trimmed; server best-effort expands it to coords/name — see below)
+   *   null    -> clear the venue (url AND the cached coords/name)
+   *
+   * The url is stored VERBATIM and always drives the G-Maps button (no server call). ONLY when this
+   * value CHANGES does the server re-run the SSRF-hardened resolver to refresh venueLat/Lng/Name; the
+   * resolve is best-effort and non-fatal (a failure stores the url with null coords — G-Maps still works,
+   * Waze just hides). venueLat/Lng/Name are server-derived and NOT client-writable. Editing the venue is a
+   * real field edit, so it clears `needsDetails` (0073) like any other field.
+   */
+  venueUrl?: string | null;
 }
 
 /**

@@ -31,6 +31,7 @@ import { SettingsController } from './settings.controller';
 import { SettingsService } from './settings.service';
 import { ResetService } from './reset.service';
 import { RoutinesController } from './routines/routines.controller';
+import { MapsResolverService } from './maps-resolver.service';
 import { RoutinesService } from './routines/routines.service';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
@@ -83,6 +84,7 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     ListsService,
     LocationsService,
     TasksService,
+    MapsResolverService,
     ArenaSessionService,
     ResetService,
     RoutinesService,

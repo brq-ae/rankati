@@ -1104,6 +1104,20 @@ export default function App() {
     }
   }
 
+  // Venue (ADR 0096) — the pasted Google-Maps link, tri-state like notes ('' clears → server null). The
+  // server best-effort expands it to coords/name when the url CHANGES, so we patch the one task in place
+  // with the RETURNED row (it carries venueLat/Lng/Name) — that is what lights up the Waze button. Venue
+  // touches no gate/Today state, so no refresh.
+  async function onSetVenue(id: string, value: string): Promise<void> {
+    setError(null);
+    try {
+      const updated = await updateTask(id, { venueUrl: value === '' ? null : value });
+      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   /** Forget a pending delete — undo, or once commit has taken over. Mirrors `clearPending` (ADR 0092). */
   function clearPendingDelete(id: string): void {
     const timer = deleteTimers.current.get(id);
@@ -1372,7 +1386,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.43.0 — pinned lists + links</p>
+            <p className="text-sm text-muted">v0.44.0 — venue</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1825,6 +1839,7 @@ export default function App() {
             onClose={closeDetail}
             onRename={onRename}
             onSetNotes={onSetNotes}
+            onSetVenue={onSetVenue}
             onSetList={onSetList}
             onSetNotBefore={onSetNotBefore}
             onSetDue={onSetDue}

@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] — 2026-09-10
+
+### Added
+
+- **Venue — a place for a task.** Open a task and paste a **Google Maps link** into the new **Venue** field. Once saved, the task shows two buttons: **G-Maps** opens the saved link (jumping straight into the Maps app on your phone), and **Waze** starts navigation there. Rankati works out the coordinates from the link for you; if a link has no coordinates, Waze searches by the place name instead, and if there's nothing to route to, the Waze button simply doesn't appear. Clear the field to remove the venue. (Venue is a place *on one task* — separate from the reusable Home/Office **locations** that filter your Today hand.)
+
 ## [0.43.0] — 2026-09-10
 
 ### Added

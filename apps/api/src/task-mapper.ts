@@ -88,6 +88,13 @@ export function toTaskDto(task: TaskWithRelations): TaskDto {
     // Free-text notes (ADR 0090) — INERT: carried to the wire exactly like title, NEVER read by any
     // ranking/gate/Today/Arena query. Plain nullable string. The update-path handling is the next slice.
     notes: task.notes,
+    // Venue (ADR 0096) — the pasted Google-Maps url plus its best-effort expanded coords/name. All plain
+    // nullable, carried verbatim: venueUrl drives G-Maps (no server call), venueLat/Lng drive Waze, venueName
+    // is the Waze search fallback. INERT like notes — never read by ranking/gates/Today/Arena.
+    venueUrl: task.venueUrl,
+    venueLat: task.venueLat,
+    venueLng: task.venueLng,
+    venueName: task.venueName,
     // The impact pin's snooze instant (ADRs 0075, 0086) — Date -> ISO like createdAt, or null. Carried on
     // every read so the client derives the snooze map straight from the task list.
     pinSnoozedUntil: task.pinSnoozedUntil ? task.pinSnoozedUntil.toISOString() : null,

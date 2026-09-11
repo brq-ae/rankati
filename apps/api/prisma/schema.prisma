@@ -212,6 +212,18 @@ model Task {
   /// discipline; internal newlines are preserved.
   notes String?
 
+  /// Venue (ADR 0096, meetings epic Build 2) — a per-task place, DISTINCT from context-Location (0060, which
+  /// tags WHERE a task can be done). The owner pastes a Google-Maps link; `venueUrl` is stored verbatim and
+  /// always drives the G-Maps button with NO server call. The server best-effort expands the link to
+  /// coordinates (SSRF-hardened, maps-link-resolver.ts) so a Waze button can deep-link; `venueName` is the
+  /// place-name fallback when a link carries no coords. All nullable — NULL = no venue, every pre-0096 row.
+  /// Coords/name are a cache of the URL: they're re-derived only when `venueUrl` CHANGES, best-effort and
+  /// non-fatal (a resolve failure never blocks the save — G-Maps still works off the stored URL).
+  venueUrl  String?
+  venueLat  Float?
+  venueLng  Float?
+  venueName String?
+
   @@index([ownerId])
   @@index([listId])
   /// Fair pairing draws the least-dueled active tasks first (0004).
