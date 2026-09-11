@@ -132,7 +132,7 @@ interface TaskDetailProps {
   /** Set the Venue link (ADR 0096) — a Google-Maps url; commit-on-blur/Enter; '' clears (server → null,
    * incl. the cached coords). The server best-effort resolves coords/name when it changes. */
   onSetVenue: (id: string, value: string) => void;
-  /** Set meeting fields (ADR 0097) — eventAt/durationMinutes/surfaceLeadDays/reminderLeadMinutes via the
+  /** Set meeting fields (ADR 0097) — eventAt/durationMinutes/surfaceLeadDays/reminderLeadsMinutes via the
    * tri-state PATCH; resolves to the soft overlap advisory the response carried (empty when clear). */
   onSetMeeting: (id: string, patch: UpdateTaskDto) => Promise<MeetingOverlap[]>;
   /** Move the task to another list — changes only its listId (ADR 0056 follow-on). */
@@ -245,11 +245,12 @@ export default function TaskDetail({
   const [draftVenue, setDraftVenue] = useState(task?.venueUrl ?? '');
   const [editingVenue, setEditingVenue] = useState(false);
   // Meeting (ADR 0097). The reminder lead is edited as count + unit (min/hr/day) like the v0.41.1 nag
-  // control; it is seeded from the task's single reminder (or 1h when none) and re-synced when the task
-  // changes. `overlaps` holds the soft double-book advisory returned by the last meeting save.
-  const initialLead = task?.reminders?.[0]?.leadMinutes ?? 60;
-  const [remCount, setRemCount] = useState(decomposeLead(initialLead).count);
-  const [remUnit, setRemUnit] = useState<LeadUnit>(decomposeLead(initialLead).unit);
+  // control (Build 3.5). The reminders are now a LIST: each row is a {count, unit}, seeded from the task's
+  // TaskReminder rows and re-synced when they change. `overlaps` holds the soft double-book advisory from
+  // the last meeting save.
+  const [remRows, setRemRows] = useState<{ count: number; unit: LeadUnit }[]>(
+    (task?.reminders ?? []).map((r) => decomposeLead(r.leadMinutes)),
+  );
   const [overlaps, setOverlaps] = useState<MeetingOverlap[]>([]);
   // Win 2 (ADR 0095): checklist items + notes are display-by-default (links clickable via <Linkified>);
   // a ✎ enters edit using the existing input/textarea, so an all-link item is still editable.
@@ -611,27 +612,41 @@ export default function TaskDetail({
     if (draftTitle.trim() && draftTitle !== task.title) onRename(task.id, draftTitle);
   };
 
-  // Meeting (ADR 0097). Re-seed the reminder count/unit from the task's saved reminder, and drop a stale
-  // overlap banner, whenever the open task or its reminder changes. Keyed narrowly so typing isn't clobbered.
-  const savedLead = task.reminders?.[0]?.leadMinutes ?? null;
+  // Meeting (ADR 0097 + Build 3.5). Re-seed the reminder ROWS from the task's saved reminders, and drop a
+  // stale overlap banner, whenever the open task or its reminder set changes. Keyed on the lead signature so
+  // typing a count isn't clobbered mid-edit but a server reconcile (add/remove/dedupe) does re-sync.
+  const remindersKey = (task.reminders ?? []).map((r) => r.leadMinutes).join(',');
   useEffect(() => {
-    const d = decomposeLead(savedLead ?? 60);
-    setRemCount(d.count);
-    setRemUnit(d.unit);
+    setRemRows((task.reminders ?? []).map((r) => decomposeLead(r.leadMinutes)));
     setOverlaps([]);
-  }, [task.id, savedLead]);
+  }, [task.id, remindersKey]);
 
   // Every meeting edit goes through onSetMeeting and stores the returned soft overlap advisory for the
   // banner. eventAt is sent as a UTC instant derived from the local datetime-local; empty clears the whole
-  // meeting (server cascade). The reminder is the single-row surface: a count+unit → reminderLeadMinutes,
-  // toggled off → null. surfaceLeadDays blank → null (day-of).
+  // meeting (server cascade). surfaceLeadDays blank → null (day-of).
   const saveMeeting = async (patch: UpdateTaskDto) => {
     setOverlaps(await onSetMeeting(task.id, patch));
   };
   const reminderOn = (task.reminders?.length ?? 0) > 0;
-  const commitReminderLead = (count: number, unit: LeadUnit) => {
-    const lead = Math.min(UNIT_MAX[unit] * UNIT_MINS[unit], Math.max(0, count) * UNIT_MINS[unit]);
-    void saveMeeting({ reminderLeadMinutes: lead });
+  // The reminder list (Build 3.5). Every row change sends the FULL set as reminderLeadsMinutes (the server
+  // dedupes + reconciles, preserving fire-once on unchanged leads). Removing the last row sends [] (clears).
+  const leadOf = (r: { count: number; unit: LeadUnit }) =>
+    Math.min(UNIT_MAX[r.unit] * UNIT_MINS[r.unit], Math.max(0, r.count) * UNIT_MINS[r.unit]);
+  const commitRows = (rows: { count: number; unit: LeadUnit }[]) =>
+    void saveMeeting({ reminderLeadsMinutes: rows.map(leadOf) });
+  // A sensible next lead when adding a row: the first preset not already chosen (so "+ Add" gives a distinct
+  // reminder rather than a dedupe no-op). Presets in minutes: 1h, 1 day, 30m, 2h, 15m.
+  const addReminderRow = () => {
+    const present = new Set(remRows.map(leadOf));
+    const next = [60, 1440, 30, 120, 15].find((m) => !present.has(m)) ?? 60;
+    const rows = [...remRows, decomposeLead(next)];
+    setRemRows(rows);
+    commitRows(rows);
+  };
+  const removeReminderRow = (i: number) => {
+    const rows = remRows.filter((_, idx) => idx !== i);
+    setRemRows(rows);
+    commitRows(rows);
   };
 
   /**
@@ -924,51 +939,75 @@ export default function TaskDetail({
                 />
               </label>
 
-              {/* Telegram reminder (ADR 0097) — one, v1: a checkbox + count + unit (min/hr/day). Default 1h
-                  when a meeting is added; unchecking removes it. Fires even inside quiet-hours (time-critical). */}
+              {/* Telegram reminders (ADR 0097 + Build 3.5) — a LIST: a checkbox to turn reminders on/off, then
+                  one row per reminder (count + min/hr/day + ✕ remove) and an "+ Add reminder" (≤5). Each change
+                  sends the FULL set; the server dedupes + reconciles (preserving fire-once). Default 1h on a
+                  fresh meeting; fires even inside quiet-hours (time-critical). */}
               <div className="flex flex-col gap-1">
                 <label className="flex items-center gap-2 text-xs text-muted">
                   <input
                     type="checkbox"
                     checked={reminderOn}
-                    onChange={(e) =>
-                      void saveMeeting({
-                        reminderLeadMinutes: e.target.checked ? remCount * UNIT_MINS[remUnit] : null,
-                      })
-                    }
+                    onChange={(e) => void saveMeeting({ reminderLeadsMinutes: e.target.checked ? [60] : [] })}
                     aria-label="Remind me on Telegram"
                   />
                   Remind me on Telegram
                 </label>
                 {reminderOn && (
-                  <div className="ml-6 flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      max={UNIT_MAX[remUnit]}
-                      value={remCount}
-                      onChange={(e) => setRemCount(Math.min(UNIT_MAX[remUnit], Math.max(0, Number(e.target.value))))}
-                      onBlur={() => commitReminderLead(remCount, remUnit)}
-                      aria-label="Reminder lead"
-                      className="w-20 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
-                    />
-                    <select
-                      value={remUnit}
-                      onChange={(e) => {
-                        const u = e.target.value as LeadUnit;
-                        const c = Math.min(UNIT_MAX[u], Math.max(0, remCount));
-                        setRemUnit(u);
-                        setRemCount(c);
-                        commitReminderLead(c, u);
-                      }}
-                      aria-label="Reminder lead unit"
-                      className="rounded-xl border border-field bg-control-bg px-2 py-1 text-sm"
-                    >
-                      <option value="minutes">minutes</option>
-                      <option value="hours">hours</option>
-                      <option value="days">days</option>
-                    </select>
-                    <span className="text-xs text-faint">before</span>
+                  <div className="ml-6 flex flex-col gap-2">
+                    {remRows.map((row, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={UNIT_MAX[row.unit]}
+                          value={row.count}
+                          onChange={(e) => {
+                            const c = Math.min(UNIT_MAX[row.unit], Math.max(0, Number(e.target.value)));
+                            setRemRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, count: c } : r)));
+                          }}
+                          onBlur={() => commitRows(remRows)}
+                          aria-label={`Reminder ${i + 1} lead`}
+                          className="w-20 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
+                        />
+                        <select
+                          value={row.unit}
+                          onChange={(e) => {
+                            const u = e.target.value as LeadUnit;
+                            const rows = remRows.map((r, idx) =>
+                              idx === i ? { count: Math.min(UNIT_MAX[u], Math.max(0, r.count)), unit: u } : r,
+                            );
+                            setRemRows(rows);
+                            commitRows(rows);
+                          }}
+                          aria-label={`Reminder ${i + 1} unit`}
+                          className="rounded-xl border border-field bg-control-bg px-2 py-1 text-sm"
+                        >
+                          <option value="minutes">minutes</option>
+                          <option value="hours">hours</option>
+                          <option value="days">days</option>
+                        </select>
+                        <span className="text-xs text-faint">before</span>
+                        <button
+                          type="button"
+                          onClick={() => removeReminderRow(i)}
+                          aria-label={`Remove reminder ${i + 1}`}
+                          className="touch-manipulation rounded-sm px-1 text-sm text-faint hover:text-body"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    {remRows.length < 5 && (
+                      <button
+                        type="button"
+                        onClick={addReminderRow}
+                        aria-label="Add reminder"
+                        className="w-fit touch-manipulation rounded-xl border border-field bg-control-bg px-2 py-1 text-xs text-body hover:bg-hover"
+                      >
+                        + Add reminder
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

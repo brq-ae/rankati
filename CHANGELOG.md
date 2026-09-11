@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46.0] — 2026-09-11
+
+### Added
+
+- **Several reminders per meeting.** A meeting can now carry more than one Telegram reminder — set, say, **1 day before AND 1 hour before**. In a task's Meeting section, each reminder is its own row (a number + minutes/hours/days); use **+ Add reminder** to add another (up to 5) and ✕ to remove one. A new meeting still starts with a single 1-hour reminder. Each fires once at its own time; rescheduling the meeting re-arms them all.
+
 ## [0.45.0] — 2026-09-11
 
 ### Added

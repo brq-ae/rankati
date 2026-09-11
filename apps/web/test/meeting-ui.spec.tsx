@@ -95,24 +95,58 @@ describe('Meeting UI (ADR 0097 S3)', () => {
     expect(onSet).toHaveBeenCalledWith('a', { eventAt: null });
   });
 
-  it('when a meeting is set, the reminder defaults to checked at 1 hour', () => {
+  it('when a meeting is set, one reminder row shows, defaulting to 1 hour', () => {
     renderDetail(withMeeting());
     expect((screen.getByLabelText('Remind me on Telegram') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('Reminder lead') as HTMLInputElement).value).toBe('1');
-    expect((screen.getByLabelText('Reminder lead unit') as HTMLSelectElement).value).toBe('hours');
+    expect((screen.getByLabelText('Reminder 1 lead') as HTMLInputElement).value).toBe('1');
+    expect((screen.getByLabelText('Reminder 1 unit') as HTMLSelectElement).value).toBe('hours');
   });
 
-  it('changing the reminder unit to days PATCHes reminderLeadMinutes (count × 1440)', () => {
+  it('renders one row per reminder in the list', () => {
+    renderDetail(
+      withMeeting({
+        reminders: [
+          { id: 'r1', taskId: 'a', leadMinutes: 1440, sentAt: null, createdAt: AT },
+          { id: 'r2', taskId: 'a', leadMinutes: 60, sentAt: null, createdAt: AT },
+        ],
+      }),
+    );
+    expect(screen.getByLabelText('Reminder 1 lead')).toBeTruthy();
+    expect(screen.getByLabelText('Reminder 2 lead')).toBeTruthy();
+    expect(screen.queryByLabelText('Reminder 3 lead')).toBeNull();
+  });
+
+  it('changing a row unit to days sends the FULL set as reminderLeadsMinutes', () => {
     const onSet = renderDetail(withMeeting({ reminders: [{ id: 'r1', taskId: 'a', leadMinutes: 120, sentAt: null, createdAt: AT }] }));
-    // 120 min shows as 2 hours; switch the unit to days → 2 × 1440.
-    fireEvent.change(screen.getByLabelText('Reminder lead unit'), { target: { value: 'days' } });
-    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadMinutes: 2 * 1440 });
+    // 120 min shows as 2 hours; switch to days → the set becomes [2 × 1440].
+    fireEvent.change(screen.getByLabelText('Reminder 1 unit'), { target: { value: 'days' } });
+    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadsMinutes: [2 * 1440] });
   });
 
-  it('unchecking the reminder PATCHes reminderLeadMinutes: null', () => {
+  it('"+ Add reminder" appends a distinct lead and sends the grown set', () => {
+    const onSet = renderDetail(withMeeting()); // one 1h (60) reminder
+    fireEvent.click(screen.getByLabelText('Add reminder'));
+    // The next preset after 60 is 1440 (1 day) → set is [60, 1440].
+    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadsMinutes: [60, 1440] });
+  });
+
+  it('removing a row sends the reduced set', () => {
+    const onSet = renderDetail(
+      withMeeting({
+        reminders: [
+          { id: 'r1', taskId: 'a', leadMinutes: 1440, sentAt: null, createdAt: AT },
+          { id: 'r2', taskId: 'a', leadMinutes: 60, sentAt: null, createdAt: AT },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByLabelText('Remove reminder 1')); // drop the 1-day row
+    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadsMinutes: [60] });
+  });
+
+  it('unchecking "Remind me" clears all reminders ([])', () => {
     const onSet = renderDetail(withMeeting());
     fireEvent.click(screen.getByLabelText('Remind me on Telegram'));
-    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadMinutes: null });
+    expect(onSet).toHaveBeenCalledWith('a', { reminderLeadsMinutes: [] });
   });
 
   it('setting a duration PATCHes durationMinutes (capped ≤ 1440)', () => {

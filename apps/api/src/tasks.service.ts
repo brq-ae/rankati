@@ -186,6 +186,28 @@ function parseBoundedInt(value: unknown, min: number, max: number, field: string
 }
 
 /**
+ * The FULL desired set of reminder leads (ADR 0097 + Build 3.5) → validated, DEDUPED minutes. Leads are a
+ * SET (two equal leads would double-ping), each 0..43200, at most 5 per meeting (>5 → 400). `[]` is valid
+ * (clear all). The reconcile against existing rows happens later; this only shapes the input.
+ */
+const MAX_REMINDERS = 5;
+function parseReminderLeads(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw new BadRequestException('reminderLeadsMinutes must be an array of minutes (integers 0..43200), or [] to clear');
+  }
+  for (const v of value) {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 43200) {
+      throw new BadRequestException('each reminder lead must be an integer between 0 and 43200 (minutes)');
+    }
+  }
+  const deduped = [...new Set(value as number[])];
+  if (deduped.length > MAX_REMINDERS) {
+    throw new BadRequestException(`a meeting can have at most ${MAX_REMINDERS} reminders`);
+  }
+  return deduped;
+}
+
+/**
  * The client's local TIME of day, validated — the second half of the clock context (0070).
  * Zero-padded 24h is strict for the same reason `on` is: the window check compares 'HH:MM'
  * strings, and only the zero-padded form compares chronologically ('9:30' sorts AFTER
@@ -884,9 +906,9 @@ export class TasksService {
       data.durationMinutes = null;
       data.surfaceLeadDays = null;
     }
-    // Validate the reminder lead up front (shape); the row op is decided after the task is loaded.
-    const reminderInDto = 'reminderLeadMinutes' in dto;
-    const nextReminderLead = reminderInDto ? parseBoundedInt(dto.reminderLeadMinutes, 0, 43200, 'reminderLeadMinutes') : undefined;
+    // Validate the reminder lead SET up front (shape/dedupe/cap); the row reconcile is decided after load.
+    const reminderInDto = 'reminderLeadsMinutes' in dto;
+    const desiredLeads = reminderInDto ? parseReminderLeads(dto.reminderLeadsMinutes) : undefined;
 
     // Dependencies are not a column, so they are not part of `data` — they are rows in a
     // join table, replaced in the same transaction below.
@@ -911,7 +933,7 @@ export class TasksService {
     // say — look exactly like a successful edit.
     if (Object.keys(data).length === 0 && nextDependencies === null && nextLocations === null && !reminderInDto) {
       throw new BadRequestException(
-        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, venueUrl, eventAt, durationMinutes, surfaceLeadDays, reminderLeadMinutes, or any combination',
+        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, venueUrl, eventAt, durationMinutes, surfaceLeadDays, reminderLeadsMinutes, or any combination',
       );
     }
 
@@ -950,35 +972,38 @@ export class TasksService {
       }
     }
 
-    // Meeting reminder (ADR 0097) — decide the child-row op now that the OLD state is loaded. v1 exposes a
-    // SINGLE reminder over the list model, so `set` collapses to exactly one row (delete-all + create-one).
-    //  - clearing eventAt        -> clear reminders (no anchor left)
-    //  - reminderLeadMinutes:null-> clear reminders
-    //  - reminderLeadMinutes:N   -> set the one reminder to N (requires an effective eventAt; 400 otherwise)
-    //  - eventAt first set, no explicit lead -> DEFAULT 60-min reminder (a meeting arrives pre-armed)
-    //  - eventAt CHANGED (reschedule), reminders exist, no explicit lead -> RE-ARM (reset sentAt) so it pings again
+    // Meeting reminders (ADR 0097 + Build 3.5) — decide the child-row op now the OLD rows are loaded. The
+    // list can carry several; `reconcile` diffs the DESIRED lead set against the existing rows: KEEP rows
+    // whose lead stays (preserving their fire-once `sentAt`), DELETE removed ones, CREATE new-unsent ones —
+    // so adding a reminder never re-fires one that already went. Cases:
+    //  - clearing eventAt              -> clear all reminders (no anchor left)
+    //  - reminderLeadsMinutes:[]       -> clear all
+    //  - reminderLeadsMinutes:[..]     -> reconcile to that set (requires an effective eventAt; 400 otherwise)
+    //  - eventAt first set, no set sent -> DEFAULT single 60-min reminder (a meeting arrives pre-armed)
+    //  - eventAt CHANGED (reschedule), reminders exist, no set sent -> RE-ARM all (reset sentAt) so they ping again
     const effectiveEventAt = eventInDto ? nextEventAt : task.eventAt;
     const eventChanged = eventInDto && (task.eventAt?.getTime() ?? null) !== (nextEventAt?.getTime() ?? null);
-    let remOp: 'none' | 'clear' | 'set' | 'rearm' = 'none';
-    let remLead = 60;
+    let remOp: 'none' | 'clear' | 'reconcile' | 'rearm' = 'none';
+    let reconcileLeads: number[] = [];
     if (clearingEvent) {
       remOp = 'clear';
     } else if (reminderInDto) {
-      if (nextReminderLead === null) {
+      const leads = desiredLeads as number[];
+      if (leads.length === 0) {
         remOp = 'clear';
       } else {
         if (effectiveEventAt === null) {
           throw new BadRequestException('a reminder needs a meeting time — set eventAt too, or first');
         }
-        remOp = 'set';
-        remLead = nextReminderLead as number;
+        remOp = 'reconcile';
+        reconcileLeads = leads;
       }
     } else if (eventInDto && nextEventAt !== null) {
       if (task.eventAt === null && task.reminders.length === 0) {
-        remOp = 'set'; // a meeting is being added for the first time → default 1h reminder
-        remLead = 60;
+        remOp = 'reconcile'; // a meeting is being added for the first time → default single 1h reminder
+        reconcileLeads = [60];
       } else if (eventChanged && task.reminders.length > 0) {
-        remOp = 'rearm'; // rescheduled → the existing reminder(s) fire again
+        remOp = 'rearm'; // rescheduled → the existing reminders fire again
       }
     }
 
@@ -1005,14 +1030,21 @@ export class TasksService {
           });
         }
       }
-      // Meeting reminders (ADR 0097) — the child-row op decided above. `set` is a delete-all + create-one
-      // (v1's single-reminder surface), so a fresh row always starts un-sent (re-armed). `rearm` just resets
-      // sentAt so a rescheduled meeting pings again without changing the lead.
+      // Meeting reminders (ADR 0097 + Build 3.5) — the child-row op decided above. `reconcile` diffs the
+      // desired lead set against the existing rows: DELETE rows whose lead was dropped, CREATE rows for new
+      // leads (un-sent); rows whose lead stayed are UNTOUCHED, keeping their `sentAt` so an already-fired
+      // reminder never re-fires when you add another. `rearm` resets every sentAt (a reschedule).
       if (remOp === 'clear') {
         await tx.taskReminder.deleteMany({ where: { taskId: task.id } });
-      } else if (remOp === 'set') {
-        await tx.taskReminder.deleteMany({ where: { taskId: task.id } });
-        await tx.taskReminder.create({ data: { taskId: task.id, leadMinutes: remLead } });
+      } else if (remOp === 'reconcile') {
+        const existingLeads = new Set(task.reminders.map((r) => r.leadMinutes));
+        const target = new Set(reconcileLeads);
+        const toDelete = task.reminders.filter((r) => !target.has(r.leadMinutes)).map((r) => r.id);
+        if (toDelete.length > 0) await tx.taskReminder.deleteMany({ where: { id: { in: toDelete } } });
+        const toCreate = reconcileLeads.filter((l) => !existingLeads.has(l));
+        if (toCreate.length > 0) {
+          await tx.taskReminder.createMany({ data: toCreate.map((leadMinutes) => ({ taskId: task.id, leadMinutes })) });
+        }
       } else if (remOp === 'rearm') {
         await tx.taskReminder.updateMany({ where: { taskId: task.id }, data: { sentAt: null } });
       }

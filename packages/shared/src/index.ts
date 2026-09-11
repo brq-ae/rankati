@@ -542,16 +542,19 @@ export interface UpdateTaskDto {
    */
   surfaceLeadDays?: number | null;
   /**
-   * The single meeting reminder's lead in MINUTES (ADR 0097) — v1's one-reminder surface over the child
-   * list, tri-state:
-   *   omitted -> leave the reminders exactly as they are
-   *   value   -> set the (single) reminder to fire this many minutes before eventAt (integer 0..43200,
-   *              0 = at the moment); creates the row if absent, updates it (and re-arms sentAt) if present
-   *   null    -> remove the reminder(s)
-   * Requires eventAt to be set (on this task or in the same PATCH); a lead with no event is a 400. When a
-   * meeting's eventAt is first set and this is omitted, the server creates a DEFAULT reminder of 60 minutes.
+   * The meeting reminder leads, in MINUTES (ADR 0097 + Build 3.5 addendum) — the FULL desired SET of
+   * reminders over the child list, tri-state:
+   *   omitted   -> leave the reminders exactly as they are
+   *   []        -> clear all reminders
+   *   [n, ...]  -> the exact set of leads (each an integer 0..43200, 0 = at the moment); DEDUPED (leads are
+   *                a set — two equal leads collapse), MAX 5 (>5 → 400)
+   * The server RECONCILES by lead value: rows whose lead stays in the set are KEPT (preserving their
+   * fire-once `sentAt`), rows whose lead was removed are DELETED, and new leads are CREATED unsent — so
+   * adding a reminder never re-fires one that already went. A non-empty set requires eventAt (on this task
+   * or in the same PATCH), else 400. When a meeting's eventAt is first set and this is omitted, the server
+   * creates a DEFAULT single reminder of 60 minutes. `reminders` on the Task carries the resulting rows.
    */
-  reminderLeadMinutes?: number | null;
+  reminderLeadsMinutes?: number[];
 }
 
 /**

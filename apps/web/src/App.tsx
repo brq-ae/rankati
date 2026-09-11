@@ -1121,7 +1121,7 @@ export default function App() {
   }
 
   // Meeting time (ADR 0097) — PATCH the given meeting keys (eventAt/durationMinutes/surfaceLeadDays/
-  // reminderLeadMinutes) and RETURN the soft overlap advisory the response carries (empty on failure), so
+  // reminderLeadsMinutes) and RETURN the soft overlap advisory the response carries (empty on failure), so
   // the detail can show its non-blocking banner. eventAt changes Today/Upcoming placement (the server's
   // meeting gate), so this refreshes like a gate edit rather than patching one task in place.
   async function onSetMeeting(id: string, patch: UpdateTaskDto): Promise<MeetingOverlap[]> {
@@ -1412,7 +1412,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.45.0 — meeting time</p>
+            <p className="text-sm text-muted">v0.46.0 — multiple reminders</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is

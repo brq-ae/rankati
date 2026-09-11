@@ -65,9 +65,9 @@ describe('PATCH /tasks/:id — meeting time (0097 S1a, real Postgres)', () => {
     expect(body.reminders[0]!.sentAt).toBeNull();
   });
 
-  it('an explicit reminderLeadMinutes wins over the default (no extra row)', async () => {
+  it('an explicit reminderLeadsMinutes wins over the default (no extra row)', async () => {
     const id = await task();
-    const body = (await patch(id, { eventAt: AT, reminderLeadMinutes: 1440 }).expect(200)).body as Task;
+    const body = (await patch(id, { eventAt: AT, reminderLeadsMinutes: [1440] }).expect(200)).body as Task;
     expect(body.reminders).toHaveLength(1);
     expect(body.reminders[0]!.leadMinutes).toBe(1440); // 1 day, allowed (> the 1440 nag cap, ≤ 43200)
   });
@@ -80,28 +80,81 @@ describe('PATCH /tasks/:id — meeting time (0097 S1a, real Postgres)', () => {
     await patch(id, { durationMinutes: 0 }).expect(400); // < 1
     await patch(id, { durationMinutes: 5000 }).expect(400); // > 1440
     await patch(id, { surfaceLeadDays: 0 }).expect(400); // < 1
-    await patch(id, { reminderLeadMinutes: 50000 }).expect(400); // > 43200
+    await patch(id, { reminderLeadsMinutes: [50000] }).expect(400); // > 43200
   });
 
   it('a reminder with no meeting time is refused (400)', async () => {
     const id = await task(); // untimed
-    await patch(id, { reminderLeadMinutes: 30 }).expect(400);
+    await patch(id, { reminderLeadsMinutes: [30] }).expect(400);
     expect(await reminders(id)).toHaveLength(0);
   });
 
-  it('reminderLeadMinutes on an already-timed task updates the single reminder', async () => {
+  it('reminderLeadsMinutes on an already-timed task sets the reminder', async () => {
     const id = await task({ eventAt: new Date(AT) });
-    await patch(id, { reminderLeadMinutes: 15 }).expect(200); // no eventAt in this PATCH — uses the stored one
+    await patch(id, { reminderLeadsMinutes: [15] }).expect(200); // no eventAt in this PATCH — uses the stored one
     const rows = await reminders(id);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.leadMinutes).toBe(15);
   });
 
-  it('reminderLeadMinutes:null clears the reminder', async () => {
+  it('reminderLeadsMinutes:[] clears the reminders', async () => {
     const id = await task();
     await patch(id, { eventAt: AT }).expect(200); // default 1h created
-    const body = (await patch(id, { reminderLeadMinutes: null }).expect(200)).body as Task;
+    const body = (await patch(id, { reminderLeadsMinutes: [] }).expect(200)).body as Task;
     expect(body.reminders).toHaveLength(0);
+  });
+
+  // Build 3.5 — multiple reminders (reconcile-by-lead).
+  it('sets several reminders at once; the wire carries them all', async () => {
+    const id = await task();
+    const body = (await patch(id, { eventAt: AT, reminderLeadsMinutes: [1440, 60, 10] }).expect(200)).body as Task;
+    expect(body.reminders.map((r) => r.leadMinutes).sort((a, b) => a - b)).toEqual([10, 60, 1440]);
+  });
+
+  it('adding a reminder PRESERVES the already-fired one’s sentAt (reconcile, not replace-all)', async () => {
+    const id = await task();
+    await patch(id, { eventAt: AT, reminderLeadsMinutes: [60] }).expect(200);
+    const [first] = await reminders(id);
+    const firedAt = new Date();
+    await prisma.taskReminder.update({ where: { id: first!.id }, data: { sentAt: firedAt } }); // pretend it fired
+    // Add a 1-day reminder alongside the 1-hour one.
+    await patch(id, { reminderLeadsMinutes: [60, 1440] }).expect(200);
+    const rows = await reminders(id);
+    expect(rows).toHaveLength(2);
+    const hour = rows.find((r) => r.leadMinutes === 60)!;
+    const day = rows.find((r) => r.leadMinutes === 1440)!;
+    expect(hour.id).toBe(first!.id); // same row — NOT recreated
+    expect(hour.sentAt).not.toBeNull(); // its fire-once survived
+    expect(day.sentAt).toBeNull(); // the new one is un-sent
+  });
+
+  it('removing a lead from the set drops only that row', async () => {
+    const id = await task();
+    await patch(id, { eventAt: AT, reminderLeadsMinutes: [10, 60, 1440] }).expect(200);
+    await patch(id, { reminderLeadsMinutes: [60] }).expect(200);
+    expect((await reminders(id)).map((r) => r.leadMinutes)).toEqual([60]);
+  });
+
+  it('deduplicates equal leads to one row', async () => {
+    const id = await task();
+    const body = (await patch(id, { eventAt: AT, reminderLeadsMinutes: [60, 60, 60] }).expect(200)).body as Task;
+    expect(body.reminders).toHaveLength(1);
+  });
+
+  it('refuses more than 5 reminders (400)', async () => {
+    const id = await task({ eventAt: new Date(AT) });
+    await patch(id, { reminderLeadsMinutes: [1, 2, 3, 4, 5, 6] }).expect(400);
+    expect(await reminders(id)).toHaveLength(0);
+  });
+
+  it('rescheduling re-arms ALL reminders (every sentAt resets)', async () => {
+    const id = await task();
+    await patch(id, { eventAt: AT, reminderLeadsMinutes: [60, 1440] }).expect(200);
+    await prisma.taskReminder.updateMany({ where: { taskId: id }, data: { sentAt: new Date() } }); // both fired
+    await patch(id, { eventAt: '2026-09-25T09:00:00.000Z' }).expect(200); // reschedule
+    const rows = await reminders(id);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.sentAt === null)).toBe(true);
   });
 
   it('rescheduling eventAt RE-ARMS the reminder (sentAt resets to null)', async () => {
