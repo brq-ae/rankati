@@ -18,6 +18,8 @@ export type TaskWithRelations = Task & {
   blockedBy: { dependsOnId: string }[];
   locations: { locationId: string }[];
   checklist: { id: string; taskId: string; text: string; done: boolean; position: number; createdAt: Date }[];
+  // Meeting reminders (ADR 0097) — same required-by-type discipline as the relations above.
+  reminders: { id: string; taskId: string; leadMinutes: number; sentAt: Date | null; createdAt: Date }[];
 };
 
 /** What every query must select to satisfy the type above. */
@@ -26,6 +28,9 @@ export const TASK_INCLUDE = {
   locations: { select: { locationId: true } },
   // Readiness checklist (ADR 0071) — ordered by position, the display order.
   checklist: { orderBy: { position: 'asc' } },
+  // Meeting reminders (ADR 0097) — ordered by lead so the earliest-firing (largest lead) is stable; v1
+  // shows one, the order matters once Build 3.5 exposes the list.
+  reminders: { orderBy: { leadMinutes: 'asc' } },
 } as const;
 
 /**
@@ -95,6 +100,19 @@ export function toTaskDto(task: TaskWithRelations): TaskDto {
     venueLat: task.venueLat,
     venueLng: task.venueLng,
     venueName: task.venueName,
+    // Meeting time (ADR 0097). eventAt is a real instant -> ISO like createdAt (NOT the date-only handling
+    // notBefore/due get); durationMinutes/surfaceLeadDays are plain nullable ints. reminders is the child
+    // list, each row's sentAt -> ISO or null. All INERT to ranking; the Today-gate (S1b) reads eventAt.
+    eventAt: task.eventAt ? task.eventAt.toISOString() : null,
+    durationMinutes: task.durationMinutes,
+    surfaceLeadDays: task.surfaceLeadDays,
+    reminders: task.reminders.map((r) => ({
+      id: r.id,
+      taskId: r.taskId,
+      leadMinutes: r.leadMinutes,
+      sentAt: r.sentAt ? r.sentAt.toISOString() : null,
+      createdAt: r.createdAt.toISOString(),
+    })),
     // The impact pin's snooze instant (ADRs 0075, 0086) — Date -> ISO like createdAt, or null. Carried on
     // every read so the client derives the snooze map straight from the task list.
     pinSnoozedUntil: task.pinSnoozedUntil ? task.pinSnoozedUntil.toISOString() : null,

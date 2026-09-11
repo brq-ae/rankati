@@ -72,6 +72,57 @@ export interface ChecklistItem {
 }
 
 /**
+ * One meeting reminder (ADR 0097, meetings epic Build 3) — a single Telegram ping fired `leadMinutes`
+ * before the task's `eventAt`. A CHILD LIST on the task from day one (v1's UI exposes exactly one), so
+ * multiple reminders is a UI-only follow-on. `sentAt` is the server-only fire-once flag, re-armed to null
+ * whenever eventAt or the lead changes.
+ */
+export interface TaskReminder {
+  id: string;
+  taskId: string;
+  /** Minutes before eventAt to fire; 0 = at the moment. Validated 0..43200 (30 days). */
+  leadMinutes: number;
+  /** ISO 8601 when it fired, or null if not yet sent (server-derived, not client-writable). */
+  sentAt: string | null;
+  /** ISO 8601. */
+  createdAt: string;
+}
+
+/**
+ * A double-book advisory (ADR 0097) — another timed task whose [start,end) overlaps the one just saved.
+ * SOFT: returned on the PATCH response so the UI can warn; the save always succeeds, never a 400.
+ */
+export interface MeetingOverlap {
+  id: string;
+  title: string;
+  /** ISO 8601 start (the other task's eventAt). */
+  start: string;
+  /** ISO 8601 end (eventAt + durationMinutes; == start when it has no duration). */
+  end: string;
+}
+
+/** Shift a zero-padded 'YYYY-MM-DD' by whole days (UTC-anchored so DST never shifts the date). ADR 0097. */
+export function shiftIsoDay(day: string, deltaDays: number): string {
+  const t = Date.parse(`${day}T00:00:00.000Z`);
+  return new Date(t + deltaDays * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Is a timed task SURFACED yet (ADR 0097) — eligible for the Today hand AND its impact-pin? A future meeting
+ * stays hidden until the local day reaches its surfacing day = eventAt's LOCAL day minus `surfaceLeadDays`
+ * (null = 0 → day-of). Pure chronological string compare on zero-padded ISO days. Server and client share
+ * this ONE definition; each derives `eventLocalDay` in its own frame (server via the owner's IANA tz, client
+ * via the browser) and `todayLocalDay` is the client's local day (`on`). Only call for tasks WITH an eventAt.
+ */
+export function meetingSurfaced(
+  eventLocalDay: string,
+  surfaceLeadDays: number | null,
+  todayLocalDay: string,
+): boolean {
+  return todayLocalDay >= shiftIsoDay(eventLocalDay, -(surfaceLeadDays ?? 0));
+}
+
+/**
  * POST /tasks/:id/checklist — add a readiness item to a task (ADR 0071). `text` is trimmed and
  * must be non-empty. The item is APPENDED: its `position` is the current max for the task + 1
  * (0 if it is the first).
@@ -239,6 +290,24 @@ export interface Task {
   venueLat: number | null;
   venueLng: number | null;
   venueName: string | null;
+  /**
+   * Meeting time (ADR 0097, meetings epic Build 3). `eventAt` is the start INSTANT (ISO 8601), a wall-clock
+   * moment — deliberately NOT day-only like notBefore/due (0052), and it never feeds the ranking math.
+   * `durationMinutes` gives the length (endAt = eventAt + duration is DERIVED, never sent). `surfaceLeadDays`
+   * is an optional day-granular Today-surfacing lead (null = enter Today on the day-of). All null = an
+   * untimed task. `reminders` is the child list of Telegram pings (v1 UI shows one; empty = none).
+   */
+  eventAt: string | null;
+  durationMinutes: number | null;
+  surfaceLeadDays: number | null;
+  reminders: TaskReminder[];
+  /**
+   * Double-book advisory (ADR 0097) — OPTIONAL and present ONLY on the PATCH response that set/changed a
+   * meeting time, never on list/Today reads (like `inheritedUrgencyFrom`, it is a property of that write,
+   * not of the task). Empty array = checked and clear; absent = not computed on this payload. Soft — it
+   * never blocks the save.
+   */
+  overlaps?: MeetingOverlap[];
   /**
    * The deadline task whose urgency, propagated backward, drives THIS task's rank (ADR 0059).
    *
@@ -450,6 +519,39 @@ export interface UpdateTaskDto {
    * real field edit, so it clears `needsDetails` (0073) like any other field.
    */
   venueUrl?: string | null;
+  /**
+   * Meeting start instant (ADR 0097), tri-state:
+   *   omitted      -> leave eventAt exactly as it is
+   *   ISO 8601     -> set it (a full timestamp, e.g. '2026-09-15T14:00:00.000Z' — NOT a date-only string)
+   *   null         -> clear it, and with it the whole meeting: durationMinutes, surfaceLeadDays, and every
+   *                   reminder (they have no meaning without a start instant)
+   * Changing eventAt RE-ARMS the reminder (its sentAt resets to null), so a rescheduled meeting pings again.
+   */
+  eventAt?: string | null;
+  /**
+   * Event length in minutes (ADR 0097), tri-state:
+   *   omitted -> leave it; value -> set it (integer 1..1440); null -> clear it.
+   * Only meaningful alongside eventAt; clearing eventAt clears this too.
+   */
+  durationMinutes?: number | null;
+  /**
+   * Optional Today-surfacing lead in DAYS (ADR 0097), tri-state:
+   *   omitted -> leave it; value -> set it (integer 1..365; surface that many days before the day-of);
+   *   null    -> back to the default (enter Today on the day-of).
+   * Only meaningful alongside eventAt; clearing eventAt clears this too.
+   */
+  surfaceLeadDays?: number | null;
+  /**
+   * The single meeting reminder's lead in MINUTES (ADR 0097) — v1's one-reminder surface over the child
+   * list, tri-state:
+   *   omitted -> leave the reminders exactly as they are
+   *   value   -> set the (single) reminder to fire this many minutes before eventAt (integer 0..43200,
+   *              0 = at the moment); creates the row if absent, updates it (and re-arms sentAt) if present
+   *   null    -> remove the reminder(s)
+   * Requires eventAt to be set (on this task or in the same PATCH); a lead with no event is a 400. When a
+   * meeting's eventAt is first set and this is omitted, the server creates a DEFAULT reminder of 60 minutes.
+   */
+  reminderLeadMinutes?: number | null;
 }
 
 /**

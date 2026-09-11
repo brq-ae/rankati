@@ -5,6 +5,12 @@ All notable changes to Rankati are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.0] — 2026-09-11
+
+### Added
+
+- **Meeting time on a task.** Open a task and set a **Meeting time** (a date and a clock time), with an optional **duration**. A timed task gets a **Telegram reminder** before it — one hour ahead by default, or set your own lead (minutes, hours, or days); untick it to turn the reminder off. A future meeting **stays out of your Today hand** (and doesn't raise its impact pin) until it's near — it waits in Upcoming and appears in Today on the day, or earlier if you set "show in Today N days before". If a new meeting time overlaps another timed task, you'll see a gentle **double-book warning** — it never blocks the save. (Meeting time is a real moment, separate from the day-only Not-before / Due gates.)
+
 ## [0.44.0] — 2026-09-10
 
 ### Added

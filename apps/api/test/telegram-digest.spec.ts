@@ -46,6 +46,15 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     },
   } as unknown as import('../src/telegram/telegram-nag.service').TelegramNagService;
 
+  // Meeting-reminder pass (ADR 0097) — stubbed; the tick just needs to call it every tick with (now, chat,
+  // tz). Its own firing logic is covered by telegram-meeting-reminder.spec.ts.
+  const reminderCalls: { chatId: string; tz: string }[] = [];
+  const meetingReminders = {
+    evaluate: async (_now: Date, chatId: string, tz: string) => {
+      reminderCalls.push({ chatId, tz });
+    },
+  } as unknown as import('../src/telegram/telegram-meeting-reminder.service').TelegramMeetingReminderService;
+
   const at = (iso: string) => {
     nowDate = new Date(iso);
   };
@@ -58,7 +67,8 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
     quiet = { start: null, end: null }; // quiet-hours OFF by default → existing tests unaffected
     nowDate = new Date('2026-07-27T08:05:00Z');
     nagCalls.length = 0;
-    svc = new TelegramDigestService(clock, config, bot, settings, nags);
+    reminderCalls.length = 0;
+    svc = new TelegramDigestService(clock, config, bot, settings, nags, meetingReminders);
   });
 
   it('fires inside the window and marks the local date on a successful send', async () => {
@@ -151,6 +161,17 @@ describe('TelegramDigestService.tick (fake clock, UTC)', () => {
       at('2026-07-27T08:05:00Z'); // 08:05 UTC → minutes 485
       await svc.tick();
       expect(nagCalls).toEqual([{ date: '2026-07-27', minutes: 485, chatId: '42' }]);
+    });
+
+    it('the tick also runs the meeting-reminder pass with the bound chat + tz (ADR 0097)', async () => {
+      await svc.tick();
+      expect(reminderCalls).toEqual([{ chatId: '42', tz: 'UTC' }]);
+    });
+
+    it('no bound chat / no timezone → the meeting-reminder pass does not run either', async () => {
+      state = { ...state, boundChatId: null };
+      await svc.tick();
+      expect(reminderCalls).toEqual([]);
     });
 
     it('the nag pass runs even when the daily digest is DISABLED (nagging is per-routine)', async () => {

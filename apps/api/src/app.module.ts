@@ -41,6 +41,7 @@ import { TelegramBotService } from './telegram/telegram-bot.service';
 import { TelegramCaptureService } from './telegram/telegram-capture.service';
 import { TelegramConfigService } from './telegram/telegram-config.service';
 import { TelegramDigestService } from './telegram/telegram-digest.service';
+import { TelegramMeetingReminderService } from './telegram/telegram-meeting-reminder.service';
 import { TelegramNagActionsService } from './telegram/telegram-nag-actions.service';
 import { TelegramNagService } from './telegram/telegram-nag.service';
 import { TelegramReadService } from './telegram/telegram-read.service';
@@ -98,6 +99,7 @@ import { TelegramReadService } from './telegram/telegram-read.service';
     TelegramReadService,
     TelegramBotService,
     TelegramDigestService,
+    TelegramMeetingReminderService,
     TelegramNagService,
     TelegramNagActionsService,
     { provide: TELEGRAM_BOT_FACTORY, useValue: defaultBotFactory },

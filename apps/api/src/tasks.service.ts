@@ -5,16 +5,19 @@ import type {
   CreateTaskDto,
   Effort,
   Impact,
+  MeetingOverlap,
   Task as TaskDto,
   TaskTier,
   UpdateTaskDto,
 } from '@rankati/shared';
+import { meetingSurfaced } from '@rankati/shared';
 import { ArenaSessionService } from './arena/arena-session.service';
 import { LOCAL_OWNER_ID } from './constants';
 import { Prisma, type Task } from './generated/prisma/client';
 import { MapsResolverService } from './maps-resolver.service';
 import { PrismaService } from './prisma.service';
 import { TASK_INCLUDE, type TaskWithRelations, toTaskDto } from './task-mapper';
+import { localNow } from './telegram/telegram-time';
 import { dayOfWeekOf, windowOpen } from './today/availability-window';
 import { ENTRY_MULT, daysUntil, urgencyMultiplier } from './today/scoring';
 import { type Block, fitPenalty, isBlock } from './today/fit';
@@ -157,6 +160,29 @@ function parseVenueUrl(value: unknown): string | null {
     throw new BadRequestException('venueUrl must be an http(s) URL');
   }
   return trimmed;
+}
+
+/**
+ * The meeting start instant (ADR 0097) → a Date, or null to clear. Unlike notBefore/due (day-only,
+ * @db.Date, ADR 0052) this is a real timestamp — the client sends a full ISO 8601 string. Only shape is
+ * checked here: a value that Date can't parse is the caller's bug (400). NOT day-only-rejected — a full ISO
+ * is what the client sends; a bare date parses to an instant and is accepted as-is.
+ */
+function parseEventAt(value: unknown): Date | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') throw new BadRequestException('eventAt must be an ISO 8601 string or null');
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) throw new BadRequestException('eventAt must be a valid ISO 8601 date-time');
+  return d;
+}
+
+/** A bounded non-negative integer field (ADR 0097), tri-state null-passthrough. `field` names it for the 400. */
+function parseBoundedInt(value: unknown, min: number, max: number, field: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new BadRequestException(`${field} must be an integer between ${min} and ${max}, or null`);
+  }
+  return value;
 }
 
 /**
@@ -312,9 +338,16 @@ export class TasksService {
    * UPCOMING sorts by the unpenalized score. With no block (Any) fitPenalty is 1 for every row, so
    * `fitScore === score` exactly and this band is byte-identical to before the term existed.
    */
+  /** A meeting's eventAt (an instant) → its LOCAL calendar day (ADR 0097): the owner's IANA tz when known,
+   * else a graceful fallback to the instant's UTC day (only near-midnight edges differ; no crash). */
+  private eventLocalDay(isoInstant: string, tz: string | null): string {
+    return tz ? localNow(new Date(isoInstant), tz).date : isoInstant.slice(0, 10);
+  }
+
   private classify(
     tasks: TaskWithRelations[],
     on: string,
+    tz: string | null,
     at?: string,
     block?: Block,
   ): { today: TaskDto[]; upcoming: TaskDto[] } {
@@ -340,13 +373,23 @@ export class TasksService {
       // mapper, so non-scored reads (Lists, the Arena pair) never carry it.
       if (!overdue && inh && inh.multiplier > mOwn) dto.urgencySourceId = inh.sourceId;
 
+      // Meeting Today-gate (ADR 0097): a task with a FUTURE eventAt not yet at its surfacing day is held
+      // OUT of the Today hand but stays VISIBLE in Upcoming (the owner's Build-3 decision — it is NOT
+      // `isGated`, which would hide it from both reads). ONLY eventAt tasks; surfaces day-of, or earlier by
+      // surfaceLeadDays. tz derives the meeting's local day; degrades to its UTC day when no tz is set.
+      const meetingHeldFromToday =
+        dto.eventAt !== null &&
+        !meetingSurfaced(this.eventLocalDay(dto.eventAt, tz), dto.surfaceLeadDays, on);
+
       const place = overdue
         ? 'overdue'
-        : dto.due === null
-          ? 'today' // undated is always playable now
-          : mEff >= ENTRY_MULT
-            ? 'today' // dated and near enough — inherited urgency can put it here (0059)
-            : 'upcoming';
+        : meetingHeldFromToday
+          ? 'upcoming' // future meeting, not yet near — visible in Upcoming, kept out of the hand
+          : dto.due === null
+            ? 'today' // undated is always playable now
+            : mEff >= ENTRY_MULT
+              ? 'today' // dated and near enough — inherited urgency can put it here (0059)
+              : 'upcoming';
       const score = dto.rating * mEff;
       // The fit term (0072): score sunk by the penalty for the Today-band sort ONLY. It is `score`
       // itself (× 1) whenever the block is Any, the task is untagged, or it fits — so this is a
@@ -382,13 +425,25 @@ export class TasksService {
    * The Today read: what is playable now, urgency-ordered, with inherited urgency propagated back
    * along dependency chains (ADRs 0052, 0053, 0057, 0058, 0059).
    */
+  /** The owner's IANA tz (ADR 0084) for deriving a meeting's local day (ADR 0097), or null when unset —
+   * loaded only when a meeting is present, so a meeting-free owner pays nothing. */
+  private async ownerTimezone(owner: string, tasks: TaskWithRelations[]): Promise<string | null> {
+    if (!tasks.some((t) => t.eventAt !== null)) return null;
+    const cfg = await this.prisma.telegramConfig.findUnique({
+      where: { ownerId: owner },
+      select: { timezone: true },
+    });
+    return cfg?.timezone ?? null;
+  }
+
   async findToday(owner: string, on?: string, at?: string, block?: string): Promise<TaskDto[]> {
     const { on: onStr } = this.requireDay(on);
     const tasks = await this.allActive(owner);
     // The clock check needs the LOADED set: whether `at` is required depends on whether any
     // task here carries a window (0070) — see requireClock for why absence then fails closed.
     // `block` is the fit context (0072), OPTIONAL and Today-only: absent = Any = no effect.
-    return this.classify(tasks, onStr, this.requireClock(tasks, at), parseBlock(block)).today;
+    const tz = await this.ownerTimezone(owner, tasks);
+    return this.classify(tasks, onStr, tz, this.requireClock(tasks, at), parseBlock(block)).today;
   }
 
   /**
@@ -398,7 +453,8 @@ export class TasksService {
   async findUpcoming(owner: string, on?: string, at?: string): Promise<TaskDto[]> {
     const { on: onStr } = this.requireDay(on);
     const tasks = await this.allActive(owner);
-    return this.classify(tasks, onStr, this.requireClock(tasks, at)).upcoming;
+    const tz = await this.ownerTimezone(owner, tasks);
+    return this.classify(tasks, onStr, tz, this.requireClock(tasks, at)).upcoming;
   }
 
   async findAll(sort?: string): Promise<TaskDto[]> {
@@ -810,6 +866,28 @@ export class TasksService {
       data.venueUrl = nextVenueUrl;
     }
 
+    // Meeting time (ADR 0097). eventAt is a real instant; durationMinutes/surfaceLeadDays are its satellites.
+    // Clearing eventAt (null) CASCADES: the satellites and every reminder lose their anchor, so they clear
+    // too — enforced here regardless of what else the PATCH sent. The reminder rows are managed in the
+    // transaction below (they are child rows, like dependencies), using `effectiveEventAt` computed post-load.
+    const eventInDto = 'eventAt' in dto;
+    let nextEventAt: Date | null = null;
+    if (eventInDto) {
+      nextEventAt = parseEventAt(dto.eventAt);
+      data.eventAt = nextEventAt;
+    }
+    const clearingEvent = eventInDto && nextEventAt === null;
+    if ('durationMinutes' in dto) data.durationMinutes = parseBoundedInt(dto.durationMinutes, 1, 1440, 'durationMinutes');
+    if ('surfaceLeadDays' in dto) data.surfaceLeadDays = parseBoundedInt(dto.surfaceLeadDays, 1, 365, 'surfaceLeadDays');
+    if (clearingEvent) {
+      // No meaning without a start instant — clear the satellites (reminders handled in the tx).
+      data.durationMinutes = null;
+      data.surfaceLeadDays = null;
+    }
+    // Validate the reminder lead up front (shape); the row op is decided after the task is loaded.
+    const reminderInDto = 'reminderLeadMinutes' in dto;
+    const nextReminderLead = reminderInDto ? parseBoundedInt(dto.reminderLeadMinutes, 0, 43200, 'reminderLeadMinutes') : undefined;
+
     // Dependencies are not a column, so they are not part of `data` — they are rows in a
     // join table, replaced in the same transaction below.
     let nextDependencies: string[] | null = null;
@@ -831,9 +909,9 @@ export class TasksService {
 
     // Nothing to do. Returning 200 here would let a caller's bug — a typo'd field name,
     // say — look exactly like a successful edit.
-    if (Object.keys(data).length === 0 && nextDependencies === null && nextLocations === null) {
+    if (Object.keys(data).length === 0 && nextDependencies === null && nextLocations === null && !reminderInDto) {
       throw new BadRequestException(
-        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, venueUrl, or any combination',
+        'nothing to update: send title, listId, notBefore, availabilityWindow, due, tier, effort, impact, dependsOn, locationIds, needsHand, needsDetails, notes, venueUrl, eventAt, durationMinutes, surfaceLeadDays, reminderLeadMinutes, or any combination',
       );
     }
 
@@ -872,6 +950,38 @@ export class TasksService {
       }
     }
 
+    // Meeting reminder (ADR 0097) — decide the child-row op now that the OLD state is loaded. v1 exposes a
+    // SINGLE reminder over the list model, so `set` collapses to exactly one row (delete-all + create-one).
+    //  - clearing eventAt        -> clear reminders (no anchor left)
+    //  - reminderLeadMinutes:null-> clear reminders
+    //  - reminderLeadMinutes:N   -> set the one reminder to N (requires an effective eventAt; 400 otherwise)
+    //  - eventAt first set, no explicit lead -> DEFAULT 60-min reminder (a meeting arrives pre-armed)
+    //  - eventAt CHANGED (reschedule), reminders exist, no explicit lead -> RE-ARM (reset sentAt) so it pings again
+    const effectiveEventAt = eventInDto ? nextEventAt : task.eventAt;
+    const eventChanged = eventInDto && (task.eventAt?.getTime() ?? null) !== (nextEventAt?.getTime() ?? null);
+    let remOp: 'none' | 'clear' | 'set' | 'rearm' = 'none';
+    let remLead = 60;
+    if (clearingEvent) {
+      remOp = 'clear';
+    } else if (reminderInDto) {
+      if (nextReminderLead === null) {
+        remOp = 'clear';
+      } else {
+        if (effectiveEventAt === null) {
+          throw new BadRequestException('a reminder needs a meeting time — set eventAt too, or first');
+        }
+        remOp = 'set';
+        remLead = nextReminderLead as number;
+      }
+    } else if (eventInDto && nextEventAt !== null) {
+      if (task.eventAt === null && task.reminders.length === 0) {
+        remOp = 'set'; // a meeting is being added for the first time → default 1h reminder
+        remLead = 60;
+      } else if (eventChanged && task.reminders.length > 0) {
+        remOp = 'rearm'; // rescheduled → the existing reminder(s) fire again
+      }
+    }
+
     // One transaction: a half-applied edit would leave the task's gates in a state the
     // user never asked for. Replacing the set means deleting what is there and inserting
     // what was sent — `dependsOn: []` therefore clears, and an absent field touches nothing
@@ -895,13 +1005,59 @@ export class TasksService {
           });
         }
       }
+      // Meeting reminders (ADR 0097) — the child-row op decided above. `set` is a delete-all + create-one
+      // (v1's single-reminder surface), so a fresh row always starts un-sent (re-armed). `rearm` just resets
+      // sentAt so a rescheduled meeting pings again without changing the lead.
+      if (remOp === 'clear') {
+        await tx.taskReminder.deleteMany({ where: { taskId: task.id } });
+      } else if (remOp === 'set') {
+        await tx.taskReminder.deleteMany({ where: { taskId: task.id } });
+        await tx.taskReminder.create({ data: { taskId: task.id, leadMinutes: remLead } });
+      } else if (remOp === 'rearm') {
+        await tx.taskReminder.updateMany({ where: { taskId: task.id }, data: { sentAt: null } });
+      }
       return tx.task.update({
         include: TASK_INCLUDE,
         where: { id: task.id },
         data,
       });
     });
-    return toTaskDto(updated);
+
+    const result = toTaskDto(updated);
+    // Soft double-book advisory (ADR 0097) — ONLY when this save left the task timed. Non-blocking: the save
+    // already committed above; this just annotates the response so the UI can warn. Never a 400.
+    if (updated.eventAt !== null) {
+      result.overlaps = await this.meetingOverlaps(LOCAL_OWNER_ID, updated.id, updated.eventAt, updated.durationMinutes);
+    }
+    return result;
+  }
+
+  /**
+   * Other ACTIVE timed tasks whose [start,end) overlaps this one (ADR 0097). endAt = eventAt + duration is
+   * computed INLINE (never stored, 0097); a task with no duration is a zero-length point. Half-open overlap:
+   * `aStart < bEnd && bStart < aEnd`. Advisory only — the caller returns it on the save, never blocks.
+   */
+  private async meetingOverlaps(
+    owner: string,
+    taskId: string,
+    eventAt: Date,
+    durationMinutes: number | null,
+  ): Promise<MeetingOverlap[]> {
+    const aStart = eventAt.getTime();
+    const aEnd = aStart + (durationMinutes ?? 0) * 60_000;
+    const others = await this.prisma.task.findMany({
+      where: { ownerId: owner, status: 'active', id: { not: taskId }, eventAt: { not: null } },
+      select: { id: true, title: true, eventAt: true, durationMinutes: true },
+    });
+    const out: MeetingOverlap[] = [];
+    for (const o of others) {
+      const bStart = o.eventAt!.getTime();
+      const bEnd = bStart + (o.durationMinutes ?? 0) * 60_000;
+      if (aStart < bEnd && bStart < aEnd) {
+        out.push({ id: o.id, title: o.title, start: o.eventAt!.toISOString(), end: new Date(bEnd).toISOString() });
+      }
+    }
+    return out;
   }
 
   /**

@@ -5,9 +5,11 @@ import type {
   Impact,
   List,
   Location,
+  MeetingOverlap,
   Task,
   TaskTier,
   UpdateChecklistItemDto,
+  UpdateTaskDto,
 } from '@rankati/shared';
 import { useEffect, useRef, useState } from 'react';
 import { Linkified } from './Linkified';
@@ -56,6 +58,30 @@ const WINDOW_CHOICES: readonly {
 /** The declared impact levels (ADR 0075) — None (default), then the two that arm the safety-net pin. */
 const IMPACTS: readonly Impact[] = ['none', 'medium', 'high'];
 const impactLabel = (i: Impact) => (i === 'none' ? 'None' : i === 'medium' ? 'Medium' : 'High');
+
+/** Meeting reminder lead (ADR 0097) — count + unit, like the v0.41.1 nag cadence but min/hr/DAY (one-shot,
+ * so its ceiling is 30 days, not the nag's 24h). Pure helpers, unit-tested via the UI. */
+type LeadUnit = 'minutes' | 'hours' | 'days';
+const UNIT_MINS: Record<LeadUnit, number> = { minutes: 1, hours: 60, days: 1440 };
+const UNIT_MAX: Record<LeadUnit, number> = { minutes: 43200, hours: 720, days: 30 };
+/** leadMinutes → the largest whole unit that represents it exactly (60→1 hour, 1440→1 day, 90→90 minutes). */
+function decomposeLead(mins: number): { count: number; unit: LeadUnit } {
+  if (mins > 0 && mins % 1440 === 0) return { count: mins / 1440, unit: 'days' };
+  if (mins > 0 && mins % 60 === 0) return { count: mins / 60, unit: 'hours' };
+  return { count: mins, unit: 'minutes' };
+}
+/** An ISO instant → the value a <input type="datetime-local"> wants: local 'YYYY-MM-DDTHH:MM' (no tz). */
+function toDateTimeLocal(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+/** A datetime-local string (local wall-clock) → a UTC ISO instant, or null when empty/invalid. */
+function fromDateTimeLocal(value: string): string | null {
+  if (!value) return null;
+  const d = new Date(value); // parses local time
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 /** The source task's scalars a clone opens seeded from (ADR 0079). Title/relations are handled elsewhere. */
 export interface CloneSeed {
@@ -106,6 +132,9 @@ interface TaskDetailProps {
   /** Set the Venue link (ADR 0096) — a Google-Maps url; commit-on-blur/Enter; '' clears (server → null,
    * incl. the cached coords). The server best-effort resolves coords/name when it changes. */
   onSetVenue: (id: string, value: string) => void;
+  /** Set meeting fields (ADR 0097) — eventAt/durationMinutes/surfaceLeadDays/reminderLeadMinutes via the
+   * tri-state PATCH; resolves to the soft overlap advisory the response carried (empty when clear). */
+  onSetMeeting: (id: string, patch: UpdateTaskDto) => Promise<MeetingOverlap[]>;
   /** Move the task to another list — changes only its listId (ADR 0056 follow-on). */
   onSetList: (id: string, listId: string) => void;
   onSetNotBefore: (id: string, value: string) => void;
@@ -185,6 +214,7 @@ export default function TaskDetail({
   onRename,
   onSetNotes,
   onSetVenue,
+  onSetMeeting,
   onSetList,
   onSetNotBefore,
   onSetDue,
@@ -214,6 +244,13 @@ export default function TaskDetail({
   const [draftNotes, setDraftNotes] = useState(task?.notes ?? '');
   const [draftVenue, setDraftVenue] = useState(task?.venueUrl ?? '');
   const [editingVenue, setEditingVenue] = useState(false);
+  // Meeting (ADR 0097). The reminder lead is edited as count + unit (min/hr/day) like the v0.41.1 nag
+  // control; it is seeded from the task's single reminder (or 1h when none) and re-synced when the task
+  // changes. `overlaps` holds the soft double-book advisory returned by the last meeting save.
+  const initialLead = task?.reminders?.[0]?.leadMinutes ?? 60;
+  const [remCount, setRemCount] = useState(decomposeLead(initialLead).count);
+  const [remUnit, setRemUnit] = useState<LeadUnit>(decomposeLead(initialLead).unit);
+  const [overlaps, setOverlaps] = useState<MeetingOverlap[]>([]);
   // Win 2 (ADR 0095): checklist items + notes are display-by-default (links clickable via <Linkified>);
   // a ✎ enters edit using the existing input/textarea, so an all-link item is still editable.
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -574,6 +611,29 @@ export default function TaskDetail({
     if (draftTitle.trim() && draftTitle !== task.title) onRename(task.id, draftTitle);
   };
 
+  // Meeting (ADR 0097). Re-seed the reminder count/unit from the task's saved reminder, and drop a stale
+  // overlap banner, whenever the open task or its reminder changes. Keyed narrowly so typing isn't clobbered.
+  const savedLead = task.reminders?.[0]?.leadMinutes ?? null;
+  useEffect(() => {
+    const d = decomposeLead(savedLead ?? 60);
+    setRemCount(d.count);
+    setRemUnit(d.unit);
+    setOverlaps([]);
+  }, [task.id, savedLead]);
+
+  // Every meeting edit goes through onSetMeeting and stores the returned soft overlap advisory for the
+  // banner. eventAt is sent as a UTC instant derived from the local datetime-local; empty clears the whole
+  // meeting (server cascade). The reminder is the single-row surface: a count+unit → reminderLeadMinutes,
+  // toggled off → null. surfaceLeadDays blank → null (day-of).
+  const saveMeeting = async (patch: UpdateTaskDto) => {
+    setOverlaps(await onSetMeeting(task.id, patch));
+  };
+  const reminderOn = (task.reminders?.length ?? 0) > 0;
+  const commitReminderLead = (count: number, unit: LeadUnit) => {
+    const lead = Math.min(UNIT_MAX[unit] * UNIT_MINS[unit], Math.max(0, count) * UNIT_MINS[unit]);
+    void saveMeeting({ reminderLeadMinutes: lead });
+  };
+
   /**
    * The checklist (ADR 0071) — soft readiness, sorted by `position` on every render rather than
    * trusted to already be in order: App's local patch (no full refresh, since a checklist edit
@@ -827,6 +887,118 @@ export default function TaskDetail({
             className="w-fit rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
           />
         </label>
+
+        {/* Meeting time (ADR 0097, meetings epic Build 3) — a real instant (start + duration), DISTINCT from
+            the day-only Due/Not-before gates. Setting it holds the task out of the Today hand until near
+            (server-side), arms a Telegram reminder (default 1h), and flags any double-book. Empty clears the
+            whole meeting. */}
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted">Meeting time</span>
+            <input
+              type="datetime-local"
+              value={task.eventAt ? toDateTimeLocal(task.eventAt) : ''}
+              onChange={(e) => void saveMeeting({ eventAt: fromDateTimeLocal(e.target.value) })}
+              aria-label="Meeting time"
+              className="w-fit rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
+            />
+          </label>
+
+          {task.eventAt && (
+            <div className="flex flex-col gap-2 border-l border-field pl-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-muted">Duration (minutes)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={task.durationMinutes ?? ''}
+                  onChange={(e) =>
+                    void saveMeeting({
+                      durationMinutes: e.target.value === '' ? null : Math.min(1440, Math.max(1, Number(e.target.value))),
+                    })
+                  }
+                  aria-label="Meeting duration"
+                  placeholder="—"
+                  className="w-24 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
+                />
+              </label>
+
+              {/* Telegram reminder (ADR 0097) — one, v1: a checkbox + count + unit (min/hr/day). Default 1h
+                  when a meeting is added; unchecking removes it. Fires even inside quiet-hours (time-critical). */}
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-xs text-muted">
+                  <input
+                    type="checkbox"
+                    checked={reminderOn}
+                    onChange={(e) =>
+                      void saveMeeting({
+                        reminderLeadMinutes: e.target.checked ? remCount * UNIT_MINS[remUnit] : null,
+                      })
+                    }
+                    aria-label="Remind me on Telegram"
+                  />
+                  Remind me on Telegram
+                </label>
+                {reminderOn && (
+                  <div className="ml-6 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={UNIT_MAX[remUnit]}
+                      value={remCount}
+                      onChange={(e) => setRemCount(Math.min(UNIT_MAX[remUnit], Math.max(0, Number(e.target.value))))}
+                      onBlur={() => commitReminderLead(remCount, remUnit)}
+                      aria-label="Reminder lead"
+                      className="w-20 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
+                    />
+                    <select
+                      value={remUnit}
+                      onChange={(e) => {
+                        const u = e.target.value as LeadUnit;
+                        const c = Math.min(UNIT_MAX[u], Math.max(0, remCount));
+                        setRemUnit(u);
+                        setRemCount(c);
+                        commitReminderLead(c, u);
+                      }}
+                      aria-label="Reminder lead unit"
+                      className="rounded-xl border border-field bg-control-bg px-2 py-1 text-sm"
+                    >
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
+                      <option value="days">days</option>
+                    </select>
+                    <span className="text-xs text-faint">before</span>
+                  </div>
+                )}
+              </div>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-muted">Show in Today (days before)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={task.surfaceLeadDays ?? ''}
+                  onChange={(e) =>
+                    void saveMeeting({
+                      surfaceLeadDays: e.target.value === '' ? null : Math.min(365, Math.max(1, Number(e.target.value))),
+                    })
+                  }
+                  aria-label="Surface in Today days before"
+                  placeholder="day-of"
+                  className="w-24 rounded-xl border border-field bg-field-bg px-2 py-1 text-sm"
+                />
+              </label>
+
+              {overlaps.length > 0 && (
+                <p role="alert" className="text-xs text-error">
+                  ⚠️ overlaps {overlaps.map((o) => o.title).join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* The availability window (ADR 0070) — a 4-preset segmented picker beside the other
             gate fields. FIXED presets, not a builder: one choice from a closed set, Anytime

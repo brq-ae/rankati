@@ -4,6 +4,7 @@ import { CLOCK, type Clock } from '../auth/clock';
 import { SettingsService } from '../settings.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramConfigService } from './telegram-config.service';
+import { TelegramMeetingReminderService } from './telegram-meeting-reminder.service';
 import { TelegramNagService } from './telegram-nag.service';
 
 /** How long after digestTime a missed digest may still fire (Step 7) — a boot at 08:15 delivers; noon skips. */
@@ -38,6 +39,7 @@ export class TelegramDigestService implements OnModuleDestroy {
     private readonly bot: TelegramBotService,
     private readonly settings: SettingsService,
     private readonly nags: TelegramNagService,
+    private readonly meetingReminders: TelegramMeetingReminderService,
   ) {}
 
   /** Start the per-minute loop. Called from main.ts after listen, so the test harness never opens it. */
@@ -77,6 +79,11 @@ export class TelegramDigestService implements OnModuleDestroy {
       // Nag pass (ADR 0091 M2) — runs EVERY tick regardless of the digest toggle (nagging is per-routine,
       // not tied to the daily digest); it self-gates on quiet-hours and never throws.
       await this.nags.evaluate(local, s.boundChatId);
+
+      // Meeting-reminder pass (ADR 0097) — also every tick, independent of the digest toggle. Fires one-shot
+      // pings for tasks whose eventAt−lead has arrived. Uses the absolute clock (tz only for the message);
+      // QUIET-HOURS EXEMPT (a meeting ping is time-critical), so it is NOT behind the quiet gate. Never throws.
+      await this.meetingReminders.evaluate(this.clock.now(), s.boundChatId, s.timezone);
 
       // Digest pass — only when the daily digest is enabled.
       if (!s.enabled) return;

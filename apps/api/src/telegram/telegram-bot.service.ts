@@ -864,6 +864,20 @@ export class TelegramBotService implements OnModuleDestroy {
     return 'sent';
   }
 
+  /** Push a plain one-shot message — the meeting reminder (ADR 0097). No buttons: it is informational, not
+   * an action prompt like the nag. Same no-bot/error contract as pushNag so the scheduler can mark-on-sent. */
+  async pushReminder(chatId: string, text: string): Promise<'sent' | 'no-bot' | 'error'> {
+    const bot = this.bot;
+    if (!bot) return 'no-bot';
+    try {
+      await bot.api.sendMessage(chatId, text);
+    } catch (err) {
+      this.logError('reminder send failed', err);
+      return 'error';
+    }
+    return 'sent';
+  }
+
   /** True when this update comes from the single linked chat. */
   private async isBoundChat(ctx: TelegramContext): Promise<boolean> {
     const chatId = String(ctx.chat?.id ?? '');

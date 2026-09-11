@@ -6,6 +6,7 @@
 export {
   computePin,
   snoozeSpanMs,
+  meetingSurfaced,
   DEFAULT_PIN_CONFIG,
   DEFAULT_SNOOZE_CONFIG,
   DEFAULT_PIN_DAYS,

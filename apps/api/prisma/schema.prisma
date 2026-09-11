@@ -205,6 +205,11 @@ model Task {
   /// permanently; nothing auto-resets `done`. Ordered by `position`.
   checklist ChecklistItem[]
 
+  /// Meeting reminders (ADR 0097, Build 3) — a CHILD LIST from day one even though v1's UI exposes exactly
+  /// ONE, so multiple reminders (Build 3.5) is a UI-only follow-on with no migration. Each row is one
+  /// Telegram ping at `eventAt − leadMinutes`. Deleting the task deletes them (cascade).
+  reminders TaskReminder[]
+
   /// Free-text notes (ADR 0090) — INERT display/data only, the one bounded stretch of 0001's minimalism.
   /// Treated exactly like `title`: stored and shown, NEVER read by ranking, any gate, Today/Upcoming, or
   /// the Arena. Its home is a promoted idea's body (convert copies it here); any task may carry one. NULL =
@@ -223,6 +228,24 @@ model Task {
   venueLat  Float?
   venueLng  Float?
   venueName String?
+
+  /// Meeting time (ADR 0097, meetings epic Build 3) — the start INSTANT of a timed event. A real
+  /// timestamptz, deliberately NOT `@db.Date` like notBefore/due (0052): those are day-only priority gates,
+  /// this is a wall-clock moment (a 2pm meeting). NULL = an untimed task, every pre-0097 row. It does NOT
+  /// feed the ranking math; its jobs are display, the Telegram reminder anchor, the overlap check, and the
+  /// Today-gate (S1b): a task with a FUTURE eventAt is held out of the Today hand + impact-pin until near.
+  eventAt DateTime?
+
+  /// How long the event runs, in minutes (ADR 0097). `endAt` = eventAt + this is DERIVED, never stored, so
+  /// it can't drift. Drives the overlap advisory (S1b) and, later, the Week view's block height. NULL = no
+  /// declared duration (treated as a zero-length point for overlap). Only meaningful alongside eventAt.
+  durationMinutes Int?
+
+  /// Optional per-meeting Today-surfacing lead, in DAYS (ADR 0097) — distinct from a reminder's minute-lead.
+  /// NULL = the default: the meeting enters the Today hand on its DAY-OF (the local calendar day of eventAt).
+  /// A value N surfaces it N days earlier. Day-granular on purpose: "show it in Today from 2 days out" is a
+  /// statement about days, like notBefore. Only meaningful alongside eventAt.
+  surfaceLeadDays Int?
 
   @@index([ownerId])
   @@index([listId])
@@ -330,6 +353,30 @@ model ChecklistItem {
   createdAt DateTime @default(now())
 
   /// Deleting the task deletes its checklist with it — an item never outlives its task.
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+/// One meeting reminder (ADR 0097, Build 3) — a single Telegram ping for a task's `eventAt`. Modeled as a
+/// child row (a LIST on the task) from day one, so multiple reminders (Build 3.5) is a pure UI change with
+/// no migration. Reached only THROUGH its task, so no ownerId — the TaskDependency/ChecklistItem shape (0053).
+model TaskReminder {
+  id     String @id @default(uuid())
+  taskId String
+
+  /// How many minutes BEFORE `eventAt` to fire — 0 = at the moment. One-shot lead, so its ceiling is larger
+  /// than the recurring nag's 1440 (ADR 0091): validated 0..43200 (30 days) at the service boundary.
+  leadMinutes Int
+
+  /// When this reminder actually fired (server-only), the fire-ONCE flag: the tick sends only while this is
+  /// NULL, then stamps it. Re-armed (set back to NULL) whenever `eventAt` or `leadMinutes` changes, so a
+  /// rescheduled meeting nags again. NULL = not yet sent.
+  sentAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  /// Deleting the task deletes its reminders — a reminder never outlives its task.
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId])

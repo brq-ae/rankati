@@ -4,10 +4,12 @@ import type {
   Impact,
   List,
   Location,
+  MeetingOverlap,
   ResetMode,
   Task,
   TaskTier,
   UpdateChecklistItemDto,
+  UpdateTaskDto,
 } from '@rankati/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Arena, { type ArenaHandle } from './Arena';
@@ -48,7 +50,7 @@ import {
   storeHeldIds,
 } from './hand';
 import { comingUp } from './coming-up';
-import { type PinDays, computePin, snoozeSpanMs, DEFAULT_PIN_DAYS } from './pin';
+import { type PinDays, computePin, snoozeSpanMs, meetingSurfaced, DEFAULT_PIN_DAYS } from './pin';
 import type { HeadOutGroup } from './TodayView';
 import { TICK_GRACE_MS } from './tick';
 import {
@@ -1118,6 +1120,23 @@ export default function App() {
     }
   }
 
+  // Meeting time (ADR 0097) — PATCH the given meeting keys (eventAt/durationMinutes/surfaceLeadDays/
+  // reminderLeadMinutes) and RETURN the soft overlap advisory the response carries (empty on failure), so
+  // the detail can show its non-blocking banner. eventAt changes Today/Upcoming placement (the server's
+  // meeting gate), so this refreshes like a gate edit rather than patching one task in place.
+  async function onSetMeeting(id: string, patch: UpdateTaskDto): Promise<MeetingOverlap[]> {
+    setError(null);
+    try {
+      const updated = await updateTask(id, patch);
+      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      await refresh(); // a future eventAt is held out of Today (server placement) — reads change
+      return updated.overlaps ?? [];
+    } catch (e) {
+      setError((e as Error).message);
+      return [];
+    }
+  }
+
   /** Forget a pending delete — undo, or once commit has taken over. Mirrors `clearPending` (ADR 0092). */
   function clearPendingDelete(id: string): void {
     const timer = deleteTimers.current.get(id);
@@ -1238,9 +1257,16 @@ export default function App() {
    * already dealt never pins), each task's declared impact + created date, plus the SERVER's config (fuses)
    * and snoozes (derived above). One fires or none. It drives nothing in the ranking — it only surfaces here.
    */
+  // A future meeting not yet at its surfacing day must NOT fire its impact-pin either (ADR 0097): the
+  // reminder covers "don't forget", so pinning a not-yet-surfaced meeting is the noise we're removing. The
+  // server already keeps it out of the Today read (placement → Upcoming), so this is a defensive belt over
+  // the SAME shared `meetingSurfaced` the server uses — deriving the meeting's local day from the browser.
+  const pinnable = visibleToday.filter(
+    (t) => t.eventAt == null || meetingSurfaced(localDay(new Date(t.eventAt)), t.surfaceLeadDays ?? null, localDay()),
+  );
   const pin = computePin(
-    visibleToday.map((t) => ({ id: t.id, impact: t.impact, createdAt: Date.parse(t.createdAt) })),
-    new Set(visibleToday.map((t) => t.id)),
+    pinnable.map((t) => ({ id: t.id, impact: t.impact, createdAt: Date.parse(t.createdAt) })),
+    new Set(pinnable.map((t) => t.id)),
     hand.map((t) => t.id),
     snoozes, // a snoozed task is suppressed; the next-most-overdue takes its place
     Date.now(),
@@ -1386,7 +1412,7 @@ export default function App() {
         <header className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rankati</h1>
-            <p className="text-sm text-muted">v0.44.0 — venue</p>
+            <p className="text-sm text-muted">v0.45.0 — meeting time</p>
           </div>
           <div className="flex items-center gap-2">
             {/* The location filter narrows the task views only; routines carry no location, so it is
@@ -1840,6 +1866,7 @@ export default function App() {
             onRename={onRename}
             onSetNotes={onSetNotes}
             onSetVenue={onSetVenue}
+            onSetMeeting={onSetMeeting}
             onSetList={onSetList}
             onSetNotBefore={onSetNotBefore}
             onSetDue={onSetDue}
